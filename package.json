@@ -1,0 +1,48 @@
+{
+  "name": "waflow",
+  "version": "0.2.1",
+  "type": "module",
+  "description": "Unified WhatsApp provider SDK — one interface, any provider.",
+  "license": "MIT",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./providers/cloud-api": {
+      "types": "./dist/providers/cloud-api/index.d.ts",
+      "import": "./dist/providers/cloud-api/index.js"
+    },
+    "./providers/360dialog": {
+      "types": "./dist/providers/360dialog/index.d.ts",
+      "import": "./dist/providers/360dialog/index.js"
+    },
+    "./providers/wati": {
+      "types": "./dist/providers/wati/index.d.ts",
+      "import": "./dist/providers/wati/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit",
+    "lint": "bunx eslint ."
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "tsup": "^8.4.0",
+    "typescript": "^5.9.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aashahin/waflow.git"
+  }
+}
