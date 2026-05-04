@@ -147,7 +147,7 @@ function flattenTemplateParameters(
     if (component.type === 'body') {
       for (const param of component.parameters) {
         if (param.type === 'text') {
-          params.push({ name: String(index), value: param.text })
+          params.push({ name: param.name?.trim() || String(index), value: param.text })
           index++
         }
       }

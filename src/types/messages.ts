@@ -173,7 +173,7 @@ export interface TemplateComponent {
 }
 
 export type TemplateParameter =
-  | { type: 'text'; text: string }
+  | { type: 'text'; text: string; name?: string }
   | { type: 'currency'; currency: CurrencyParam }
   | { type: 'date_time'; date_time: { fallback_value: string } }
   | { type: 'image'; image: MediaSource }

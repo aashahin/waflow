@@ -209,6 +209,34 @@ describe('WatiProvider', () => {
       }
     })
 
+    test('extracts nested receiver message IDs when Wati omits top-level fields', async () => {
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = mock((_url: string | URL | Request, _init?: RequestInit) =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              result: true,
+              receivers: [{ localMessageId: 'wati-msg-3' }],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        ),
+      ) as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        const result = await provider.sendMessage({
+          type: 'text',
+          to: TEST_DATA.phone.primary,
+          text: { body: 'test' },
+        })
+
+        expect(result.messageId).toBe('wati-msg-3')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
     test('throws when Wati rejects the request with an HTTP 200 response', async () => {
       const originalFetch = globalThis.fetch
       globalThis.fetch = mock((_url: string | URL | Request, _init?: RequestInit) =>
@@ -235,7 +263,7 @@ describe('WatiProvider', () => {
       }
     })
 
-    test('throws when Wati does not return a message ID for a successful send', async () => {
+    test('allows successful sends when Wati omits a message ID', async () => {
       const originalFetch = globalThis.fetch
       globalThis.fetch = mock((_url: string | URL | Request, _init?: RequestInit) =>
         Promise.resolve(
@@ -249,16 +277,14 @@ describe('WatiProvider', () => {
       try {
         const provider = createProvider()
 
-        await expect(
-          provider.sendMessage({
-            type: 'text',
-            to: TEST_DATA.phone.primary,
-            text: { body: 'test' },
-          }),
-        ).rejects.toMatchObject({
-          name: 'ProviderError',
-          message: 'Wati accepted the send request but did not return a message ID',
+        const result = await provider.sendMessage({
+          type: 'text',
+          to: TEST_DATA.phone.primary,
+          text: { body: 'test' },
         })
+
+        expect(result.messageId).toBe('')
+        expect(result.provider).toBe('wati')
       } finally {
         globalThis.fetch = originalFetch
       }

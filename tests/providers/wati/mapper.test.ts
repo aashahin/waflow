@@ -66,6 +66,31 @@ describe('mapOutboundToWati', () => {
       ])
     })
 
+    test('preserves explicit Wati parameter names when provided', () => {
+      const result = mapOutboundToWati({
+        type: 'template',
+        to: TEST_DATA.phone.primary,
+        template: {
+          name: 'named_params',
+          language: 'en',
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', text: 'Ahmed', name: 'name' },
+                { type: 'text', text: 'ORD-1', name: 'order_id' },
+              ],
+            },
+          ],
+        },
+      })
+
+      expect(result.body?.['parameters']).toEqual([
+        { name: 'name', value: 'Ahmed' },
+        { name: 'order_id', value: 'ORD-1' },
+      ])
+    })
+
     test('ignores non-body components', () => {
       const result = mapOutboundToWati({
         type: 'template',

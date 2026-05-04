@@ -23,8 +23,44 @@ const SUPPORTED_FEATURES = new Set<ProviderFeature>([
   'webhook.signature_verification',
 ])
 
+function extractMessageIdFromRecord(record: Record<string, unknown>): string {
+  const candidates = [record.localMessageId, record.messageId, record.id]
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim()
+    }
+  }
+
+  return ''
+}
+
 function extractMessageId(response: WatiSendResponse): string {
-  return response.localMessageId ?? response.messageId ?? response.id ?? ''
+  const directMessageId = extractMessageIdFromRecord(
+    response as unknown as Record<string, unknown>,
+  )
+  if (directMessageId) {
+    return directMessageId
+  }
+
+  if (!Array.isArray(response.receivers)) {
+    return ''
+  }
+
+  for (const receiver of response.receivers) {
+    if (!receiver || typeof receiver !== 'object') {
+      continue
+    }
+
+    const nestedMessageId = extractMessageIdFromRecord(
+      receiver as Record<string, unknown>,
+    )
+    if (nestedMessageId) {
+      return nestedMessageId
+    }
+  }
+
+  return ''
 }
 
 
@@ -99,10 +135,9 @@ export class WatiProvider implements WhatsAppProviderAdapter {
     const messageId = extractMessageId(response.data)
 
     if (!messageId) {
-      throw new ProviderError({
-        message: 'Wati accepted the send request but did not return a message ID',
-        provider: this.name,
-        statusCode: response.status,
+      this.logger.warn('Wati accepted the send request without a message ID', {
+        messageType: message.type,
+        path: mapped.path,
         raw: response.data,
       })
     }

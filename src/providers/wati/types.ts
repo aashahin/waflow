@@ -9,6 +9,7 @@ export interface WatiSendResponse {
   localMessageId?: string
   messageId?: string
   id?: string
+  receivers?: Array<Record<string, unknown>>
 }
 
 /** Response from Wati send template message */
@@ -18,6 +19,7 @@ export interface WatiTemplateResponse {
   localMessageId?: string
   messageId?: string
   id?: string
+  receivers?: Array<Record<string, unknown>>
 }
 
 /** Wati webhook payload — flat structure, very different from Cloud API */
