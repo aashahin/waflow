@@ -1,6 +1,6 @@
 {
   "name": "waflow",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "description": "Unified WhatsApp provider SDK — one interface, any provider.",
   "license": "MIT",
@@ -44,5 +44,17 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/aashahin/waflow.git"
-  }
+  },
+  "keywords": [
+    "whatsapp",
+    "sdk",
+    "provider",
+    "unified",
+    "interface",
+    "cloud-api",
+    "whatsapp-business-api",
+    "whatsapp-cloud-api",
+    "360dialog",
+    "wati"
+  ]
 }
