@@ -219,7 +219,7 @@ export class WatiProvider implements WhatsAppProviderAdapter {
   // -- Webhooks -----------------------------------------------------------
 
   parseWebhook(body: unknown): WebhookEvent[] {
-    return parseWatiWebhook(body)
+    return parseWatiWebhook(body, { includeRaw: this.options.includeRawWebhook ?? false })
   }
 
   // Wati does NOT natively sign its webhooks — it sends no HMAC signature header.
@@ -239,5 +239,10 @@ export class WatiProvider implements WhatsAppProviderAdapter {
 
   supports(feature: ProviderFeature): boolean {
     return SUPPORTED_FEATURES.has(feature)
+  }
+
+  /** Release the rate limiter's pending timer and queued waiters. */
+  destroy(): void {
+    this.http.destroy()
   }
 }

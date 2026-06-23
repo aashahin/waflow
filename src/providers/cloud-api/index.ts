@@ -198,7 +198,7 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
   // -- Webhooks -----------------------------------------------------------
 
   parseWebhook(body: unknown): WebhookEvent[] {
-    return parseCloudApiWebhook(body, 'cloud-api')
+    return parseCloudApiWebhook(body, 'cloud-api', { includeRaw: this.options.includeRawWebhook ?? false })
   }
 
   async verifyWebhookSignature(body: string, signature: string): Promise<boolean> {
@@ -318,6 +318,13 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
 
   supports(feature: ProviderFeature): boolean {
     return SUPPORTED_FEATURES.has(feature)
+  }
+
+  // -- Lifecycle ----------------------------------------------------------
+
+  /** Release the rate limiter's pending timer and queued waiters. */
+  destroy(): void {
+    this.http.destroy()
   }
 
   // -- Utility for subclasses (360Dialog) ---------------------------------

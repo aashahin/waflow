@@ -28,6 +28,7 @@ import { isRecord, hasProp } from '../../utils/assert.js'
 export function parseCloudApiWebhook(
   body: unknown,
   providerName: ProviderName = 'cloud-api',
+  options: { includeRaw?: boolean } = {},
 ): WebhookEvent[] {
   if (!isValidWebhookPayload(body)) return []
 
@@ -38,12 +39,15 @@ export function parseCloudApiWebhook(
       if (change.field !== 'messages') continue
 
       const value = change.value
-      const metadata = buildMetadata(value, body, providerName)
+      const metadata = buildMetadata(value, options.includeRaw ? body : undefined, providerName)
 
       // Parse incoming messages
       if (value.messages) {
+        // Index contacts once per change instead of scanning per message.
+        const contactsByWaId = new Map((value.contacts ?? []).map(c => [c.wa_id, c]))
+        const fallbackContact = value.contacts?.[0]
         for (const msg of value.messages) {
-          const contact = value.contacts?.find(c => c.wa_id === msg.from) ?? value.contacts?.[0]
+          const contact = contactsByWaId.get(msg.from) ?? fallbackContact
           events.push({
             type: 'message',
             messageId: msg.id,
@@ -214,7 +218,7 @@ function buildMetadata(
     provider,
     phoneNumberId: value.metadata.phone_number_id,
     displayPhoneNumber: value.metadata.display_phone_number,
-    raw,
+    ...(raw !== undefined ? { raw } : {}),
   }
 }
 

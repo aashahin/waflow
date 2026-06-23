@@ -247,7 +247,7 @@ describe('parseWatiWebhook', () => {
       expect(events[0]?.metadata.provider).toBe('wati')
     })
 
-    test('includes raw payload in metadata', () => {
+    test('omits raw payload from metadata by default', () => {
       const payload = {
         eventType: 'message',
         waId: TEST_DATA.phone.minimal,
@@ -255,6 +255,18 @@ describe('parseWatiWebhook', () => {
         text: 'hi',
       }
       const events = parseWatiWebhook(payload)
+
+      expect(events[0]?.metadata.raw).toBeUndefined()
+    })
+
+    test('includes raw payload in metadata when includeRaw is set', () => {
+      const payload = {
+        eventType: 'message',
+        waId: TEST_DATA.phone.minimal,
+        type: 'text',
+        text: 'hi',
+      }
+      const events = parseWatiWebhook(payload, { includeRaw: true })
 
       expect(events[0]?.metadata.raw).toEqual(payload)
     })

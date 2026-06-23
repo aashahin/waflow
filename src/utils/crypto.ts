@@ -37,14 +37,20 @@ export async function verifyHmacSha256(
   return timingSafeEqual(computed, expected)
 }
 
-/** Convert an ArrayBuffer to a lowercase hex string */
+/** Precomputed byte → 2-char hex lookup (avoids per-byte toString/padStart) */
+const HEX_TABLE: readonly string[] = Array.from({ length: 256 }, (_, i) =>
+  i.toString(16).padStart(2, '0'),
+)
+
+/** Convert an ArrayBuffer to a lowercase hex string. Runs on every webhook
+ *  signature verification, so it uses a lookup table and a single join. */
 function arrayBufferToHex(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer)
-  let hex = ''
+  const out = new Array<string>(bytes.length)
   for (let i = 0; i < bytes.length; i++) {
-    hex += (bytes[i] ?? 0).toString(16).padStart(2, '0')
+    out[i] = HEX_TABLE[bytes[i] ?? 0] as string
   }
-  return hex
+  return out.join('')
 }
 
 /**

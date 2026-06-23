@@ -60,7 +60,7 @@ export interface WhatsAppProviderAdapter {
   // -- Webhooks -----------------------------------------------------------
 
   /** Parse a raw webhook payload into normalized events */
-  parseWebhook(body: unknown, headers?: Record<string, string>): WebhookEvent[]
+  parseWebhook(body: unknown): WebhookEvent[]
 
   /**
    * Verify the cryptographic signature of a webhook payload.
@@ -90,4 +90,12 @@ export interface WhatsAppProviderAdapter {
 
   /** Check if this provider supports a specific feature */
   supports(feature: ProviderFeature): boolean
+
+  // -- Lifecycle (optional) -----------------------------------------------
+
+  /**
+   * Release any resources held by the adapter (e.g. the rate limiter's pending
+   * timer and queued waiters). Optional — adapters without resources may omit it.
+   */
+  destroy?(): void
 }

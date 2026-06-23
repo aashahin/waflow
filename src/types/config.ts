@@ -118,6 +118,13 @@ export interface ClientOptions {
   hooks?: ClientHooks
   /** Include raw provider response in SendResult (default: false) */
   includeRawResponse?: boolean
+  /**
+   * Attach the raw webhook payload to each parsed event's `metadata.raw`
+   * (default: false). Off by default so parsed events don't each retain the
+   * full webhook body — important when a single POST yields many events and
+   * they're queued for later processing.
+   */
+  includeRawWebhook?: boolean
 }
 
 /** Full config passed to `createWhatsApp()` */

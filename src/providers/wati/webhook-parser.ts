@@ -12,11 +12,14 @@ import { isRecord } from '../../utils/assert.js'
  * Wati sends flat JSON payloads — one event per webhook POST.
  * Unlike Cloud API, there is no nested entry/changes structure.
  */
-export function parseWatiWebhook(body: unknown): WebhookEvent[] {
+export function parseWatiWebhook(
+  body: unknown,
+  options: { includeRaw?: boolean } = {},
+): WebhookEvent[] {
   if (!isRecord(body)) return []
 
   const payload = body as WatiWebhookPayload
-  const metadata = buildMetadata(payload)
+  const metadata = buildMetadata(payload, options.includeRaw ?? false)
 
   // Determine event type from the payload
   const eventType = payload.eventType ?? detectEventType(payload)
@@ -174,10 +177,10 @@ function parseError(
 // Helpers
 // ---------------------------------------------------------------------------
 
-function buildMetadata(payload: WatiWebhookPayload): WebhookMetadata {
+function buildMetadata(payload: WatiWebhookPayload, includeRaw: boolean): WebhookMetadata {
   return {
     provider: 'wati',
-    raw: payload,
+    ...(includeRaw ? { raw: payload } : {}),
   }
 }
 

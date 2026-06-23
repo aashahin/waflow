@@ -13,10 +13,14 @@
  * - Validates that the result is digits only
  * - Returns the cleaned number
  */
-export function normalizePhoneNumber(phone: string): string {
-  const cleaned = phone.replace(/[\s\-\(\)\+]/g, '')
+// Hoisted to module scope so they aren't reallocated on every send.
+const STRIP_CHARS = /[\s\-()+]/g
+const E164_DIGITS = /^\d{7,15}$/
 
-  if (!/^\d{7,15}$/.test(cleaned)) {
+export function normalizePhoneNumber(phone: string): string {
+  const cleaned = phone.replace(STRIP_CHARS, '')
+
+  if (!E164_DIGITS.test(cleaned)) {
     throw new Error(
       `Invalid phone number: "${phone}". Expected 7-15 digits in E.164 format (e.g. "+966501234567").`,
     )
