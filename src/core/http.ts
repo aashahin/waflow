@@ -55,6 +55,12 @@ export interface RequestOptions {
   timeout?: number
   /** Skip retry for this request */
   skipRetry?: boolean
+  /**
+   * Override idempotency for retry purposes. By default GET/PUT/DELETE are
+   * treated as idempotent (safe to retry after ambiguous failures) and
+   * POST/PATCH are not. Set explicitly when the default is wrong.
+   */
+  idempotent?: boolean
 }
 
 export interface HttpResponse<T = unknown> {
@@ -106,33 +112,12 @@ export class HttpClient {
 
       this.config.logger.debug(`${opts.method} ${url}`)
 
-      let response: Response
-      try {
-        response = await fetch(url, {
-          method: opts.method,
-          headers,
-          body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-          signal: AbortSignal.timeout(timeout),
-        })
-      } catch (error) {
-        if (error instanceof DOMException && error.name === 'TimeoutError') {
-          throw new TimeoutError({
-            message: `Request timed out after ${timeout}ms: ${opts.method} ${url}`,
-            provider: this.config.provider,
-          })
-        }
-        if (error instanceof DOMException && error.name === 'AbortError') {
-          throw new TimeoutError({
-            message: `Request aborted: ${opts.method} ${url}`,
-            provider: this.config.provider,
-          })
-        }
-        throw new NetworkError({
-          message: `Network error: ${error instanceof Error ? error.message : String(error)}`,
-          provider: this.config.provider,
-          cause: error,
-        })
-      }
+      const response = await this.doFetch(url, {
+        method: opts.method,
+        headers,
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+        timeout,
+      })
 
       const durationMs = Date.now() - startTime
 
@@ -146,12 +131,7 @@ export class HttpClient {
         await this.handleErrorResponse(response, opts)
       }
 
-      // Handle empty responses (204 No Content, etc.)
-      const hasBody =
-        response.status !== 204 &&
-        response.headers.get('content-length') !== '0'
-
-      const data = hasBody ? ((await response.json()) as T) : (undefined as T)
+      const data = await this.parseJsonBody<T>(response, opts)
 
       this.config.logger.debug(`${opts.method} ${url} → ${response.status} (${durationMs}ms)`)
 
@@ -162,11 +142,7 @@ export class HttpClient {
       }
     }
 
-    if (opts.skipRetry) {
-      return execute()
-    }
-
-    return withRetry(execute, this.retryConfig, this.config.logger)
+    return this.run(execute, opts.method, opts.skipRetry, opts.idempotent)
   }
 
   /**
@@ -185,27 +161,21 @@ export class HttpClient {
         ...opts.headers,
       }
 
-      let response: Response
-      try {
-        response = await fetch(url, {
-          method: opts.method,
-          headers,
-          body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-          signal: AbortSignal.timeout(timeout),
-        })
-      } catch (error) {
-        if (error instanceof DOMException && error.name === 'TimeoutError') {
-          throw new TimeoutError({
-            message: `Request timed out after ${timeout}ms: ${opts.method} ${url}`,
-            provider: this.config.provider,
-          })
-        }
-        throw new NetworkError({
-          message: `Network error: ${error instanceof Error ? error.message : String(error)}`,
-          provider: this.config.provider,
-          cause: error,
-        })
-      }
+      const startTime = Date.now()
+      this.config.hooks?.onRequest?.({ url, method: opts.method, body: opts.body })
+
+      const response = await this.doFetch(url, {
+        method: opts.method,
+        headers,
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+        timeout,
+      })
+
+      this.config.hooks?.onResponse?.({
+        url,
+        status: response.status,
+        durationMs: Date.now() - startTime,
+      })
 
       if (!response.ok) {
         await this.handleErrorResponse(response, opts)
@@ -214,19 +184,15 @@ export class HttpClient {
       return response
     }
 
-    if (opts.skipRetry) {
-      return execute()
-    }
-
-    return withRetry(execute, this.retryConfig, this.config.logger)
+    return this.run(execute, opts.method, opts.skipRetry, opts.idempotent)
   }
 
   /**
    * Make a multipart/form-data request (for media uploads).
    *
-   * By default, uploads are retried on transient failures. Pass
-   * `skipRetry: true` to disable retry (recommended for large uploads
-   * where duplicate uploads are a concern).
+   * Uploads are POSTs and therefore treated as non-idempotent: they are not
+   * retried after ambiguous failures (to avoid duplicate uploads), though a
+   * `429` is still retried. Pass `skipRetry: true` to disable retry entirely.
    */
   async uploadRequest<T = unknown>(
     path: string,
@@ -245,47 +211,116 @@ export class HttpClient {
       }
       // Do NOT set Content-Type — fetch sets it with boundary for FormData
 
-      let response: Response
-      try {
-        response = await fetch(url, {
-          method: 'POST',
-          headers,
-          body: formData,
-          signal: AbortSignal.timeout(timeout),
-        })
-      } catch (error) {
-        if (error instanceof DOMException && error.name === 'TimeoutError') {
-          throw new TimeoutError({
-            message: `Upload timed out after ${timeout}ms`,
-            provider: this.config.provider,
-          })
-        }
-        throw new NetworkError({
-          message: `Upload failed: ${error instanceof Error ? error.message : String(error)}`,
-          provider: this.config.provider,
-          cause: error,
-        })
-      }
+      const startTime = Date.now()
+      this.config.hooks?.onRequest?.({ url, method: 'POST' })
+
+      const response = await this.doFetch(url, { method: 'POST', headers, body: formData, timeout })
+
+      this.config.hooks?.onResponse?.({
+        url,
+        status: response.status,
+        durationMs: Date.now() - startTime,
+      })
 
       if (!response.ok) {
         await this.handleErrorResponse(response, { method: 'POST', path })
       }
 
-      const data = (await response.json()) as T
+      const data = await this.parseJsonBody<T>(response, { method: 'POST', path })
 
       return { status: response.status, data, headers: response.headers }
     }
 
-    if (skipRetry) {
-      return execute()
-    }
+    return this.run(execute, 'POST', skipRetry, false)
+  }
 
-    return withRetry(execute, this.retryConfig, this.config.logger)
+  /**
+   * Release resources held by this client (the rate limiter's pending timer
+   * and queued waiters). Call when you're done with the client.
+   */
+  destroy(): void {
+    this.config.rateLimiter.destroy()
   }
 
   // -----------------------------------------------------------------------
   // Private helpers
   // -----------------------------------------------------------------------
+
+  /** Run `execute` with retry + a single onError hook on terminal failure. */
+  private async run<T>(
+    execute: () => Promise<T>,
+    method: RequestOptions['method'],
+    skipRetry: boolean | undefined,
+    idempotentOverride: boolean | undefined,
+  ): Promise<T> {
+    try {
+      if (skipRetry) return await execute()
+      const idempotent = idempotentOverride ?? isIdempotentMethod(method)
+      return await withRetry(execute, this.retryConfig, this.config.logger, { idempotent })
+    } catch (error) {
+      // Fire once, after retries are exhausted, with the actual thrown error
+      // (covers network/timeout errors, not just HTTP error responses).
+      this.config.hooks?.onError?.(error)
+      throw error
+    }
+  }
+
+  /** Perform a single fetch, translating low-level failures to typed errors. */
+  private async doFetch(
+    url: string,
+    init: { method: string; headers: Record<string, string>; body?: BodyInit; timeout: number },
+  ): Promise<Response> {
+    try {
+      return await fetch(url, {
+        method: init.method,
+        headers: init.headers,
+        body: init.body,
+        signal: AbortSignal.timeout(init.timeout),
+      })
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'TimeoutError') {
+        throw new TimeoutError({
+          message: `Request timed out after ${init.timeout}ms: ${init.method} ${url}`,
+          provider: this.config.provider,
+        })
+      }
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new TimeoutError({
+          message: `Request aborted: ${init.method} ${url}`,
+          provider: this.config.provider,
+        })
+      }
+      throw new NetworkError({
+        message: `Network error: ${error instanceof Error ? error.message : String(error)}`,
+        provider: this.config.provider,
+        cause: error,
+      })
+    }
+  }
+
+  /**
+   * Parse a JSON response body, tolerating empty bodies (204, no content) and
+   * surfacing non-JSON bodies as a typed ProviderError instead of an
+   * unhandled SyntaxError.
+   */
+  private async parseJsonBody<T>(
+    response: Response,
+    opts: Pick<RequestOptions, 'method' | 'path'>,
+  ): Promise<T> {
+    if (response.status === 204) return undefined as T
+    const text = await response.text()
+    if (!text) return undefined as T
+    try {
+      return JSON.parse(text) as T
+    } catch {
+      throw new ProviderError({
+        message: `Provider returned a non-JSON response: ${opts.method} ${opts.path}`,
+        provider: this.config.provider,
+        statusCode: response.status,
+        raw: text,
+      })
+    }
+  }
 
   private buildUrl(path: string, query?: Record<string, string | number | boolean | undefined>): string {
     // If path is already a full URL (e.g., media download URLs), use as-is
@@ -330,8 +365,6 @@ export class HttpClient {
       raw: errorBody,
     } as const
 
-    this.config.hooks?.onError?.(errorBody)
-
     // Classify by HTTP status
     switch (response.status) {
       case 401:
@@ -346,10 +379,11 @@ export class HttpClient {
         })
       case 429: {
         const retryAfter = response.headers.get('Retry-After')
+        const parsed = retryAfter ? parseInt(retryAfter, 10) : NaN
         throw new RateLimitError({
           message: `Rate limited: ${opts.method} ${opts.path}`,
           ...context,
-          retryAfter: retryAfter ? parseInt(retryAfter, 10) : undefined,
+          retryAfter: Number.isNaN(parsed) ? undefined : parsed,
         })
       }
       case 400:
@@ -364,4 +398,9 @@ export class HttpClient {
         })
     }
   }
+}
+
+/** GET/PUT/DELETE are idempotent and safe to retry after ambiguous failures. */
+function isIdempotentMethod(method: RequestOptions['method']): boolean {
+  return method === 'GET' || method === 'PUT' || method === 'DELETE'
 }
