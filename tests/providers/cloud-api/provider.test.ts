@@ -297,7 +297,7 @@ describe('CloudApiProvider', () => {
       }
     })
 
-    test('createTemplate lowercases category and component payload for Cloud API', async () => {
+    test('createTemplate sends UPPERCASE category and component payload for Cloud API', async () => {
       const originalFetch = globalThis.fetch
       const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) =>
         Promise.resolve(
@@ -334,10 +334,10 @@ describe('CloudApiProvider', () => {
         const calledInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined
         const body = JSON.parse(String(calledInit?.body ?? '{}')) as Record<string, unknown>
 
-        expect(body.category).toBe('utility')
+        expect(body.category).toBe('UTILITY')
         expect(body.parameter_format).toBe('positional')
         expect(Array.isArray(body.components)).toBe(true)
-        expect((body.components as Array<Record<string, unknown>>)[0]?.type).toBe('body')
+        expect((body.components as Array<Record<string, unknown>>)[0]?.type).toBe('BODY')
 
         const result = await provider.createTemplate({
           name: 'reservation_confirmation',

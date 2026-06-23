@@ -62,8 +62,8 @@ describe('WatiProvider', () => {
       expect(provider.supports('media.upload')).toBe(true)
     })
 
-    test('supports webhook.signature_verification', () => {
-      expect(provider.supports('webhook.signature_verification')).toBe(true)
+    test('does NOT support webhook.signature_verification (Wati does not natively sign webhooks)', () => {
+      expect(provider.supports('webhook.signature_verification')).toBe(false)
     })
 
     test('does NOT support interactive.button', () => {

@@ -149,10 +149,18 @@ export function mapOutboundToCloudApi(message: OutboundMessage): Record<string, 
         },
       }
 
-    case 'interactive.list':
+    case 'interactive.list': {
       if (message.sections.length > 10) {
         throw new ValidationError({
           message: `Interactive list: maximum 10 sections allowed, got ${message.sections.length}`,
+          provider: 'cloud-api',
+        })
+      }
+      // WhatsApp's real binding limit is ≤ 10 rows TOTAL across all sections.
+      const totalRows = message.sections.reduce((sum, section) => sum + section.rows.length, 0)
+      if (totalRows > 10) {
+        throw new ValidationError({
+          message: `Interactive list: maximum 10 rows total across all sections, got ${totalRows}`,
           provider: 'cloud-api',
         })
       }
@@ -177,6 +185,7 @@ export function mapOutboundToCloudApi(message: OutboundMessage): Record<string, 
           },
         },
       }
+    }
 
     default:
       return assertNever(message)
