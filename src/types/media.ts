@@ -16,6 +16,11 @@ export interface MediaUpload {
 export interface MediaUploadResult {
   /** Provider-assigned media ID */
   id: string
+  /**
+   * Direct URL to the uploaded media, when the provider returns one (e.g. WATI).
+   * Pass this URL to message sends.
+   */
+  url?: string
 }
 
 /** Result from getting a media URL */

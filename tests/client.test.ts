@@ -1,6 +1,6 @@
 import { describe, test, expect, mock } from 'bun:test'
 import { WhatsAppClient } from '../src/client.js'
-import { UnsupportedFeatureError } from '../src/core/errors.js'
+import { UnsupportedFeatureError, ValidationError } from '../src/core/errors.js'
 import type { WhatsAppProviderAdapter } from '../src/types/provider.js'
 import { TEST_DATA } from './constants.js'
 
@@ -257,7 +257,7 @@ describe('webhook namespace', () => {
     const events = client.webhook.parse({ some: 'payload' })
 
     expect(events).toHaveLength(1)
-    expect(adapter.parseWebhook).toHaveBeenCalledWith({ some: 'payload' }, undefined)
+    expect(adapter.parseWebhook).toHaveBeenCalledWith({ some: 'payload' })
   })
 
   test('webhook.verify() delegates to adapter', async () => {
@@ -333,5 +333,78 @@ describe('template namespace', () => {
     const client = new WhatsAppClient(adapter)
 
     await expect(client.template.delete('test')).rejects.toThrow(UnsupportedFeatureError)
+  })
+})
+
+describe('otp namespace', () => {
+  test('otp.send() builds an auth-template message with the code in body and button', async () => {
+    const adapter = createMockAdapter()
+    const client = new WhatsAppClient(adapter)
+
+    await client.otp.send(TEST_DATA.phone.primary, '123456', { template: 'login_code' })
+
+    expect(adapter.sendMessage).toHaveBeenCalledWith({
+      type: 'template',
+      to: TEST_DATA.phone.primary,
+      template: {
+        name: 'login_code',
+        language: 'en_US',
+        components: [
+          { type: 'body', parameters: [{ type: 'text', text: '123456' }] },
+          { type: 'button', sub_type: 'url', index: 0, parameters: [{ type: 'text', text: '123456' }] },
+        ],
+      },
+    })
+  })
+
+  test('otp.send() can omit the button and honor a custom language', async () => {
+    const adapter = createMockAdapter()
+    const client = new WhatsAppClient(adapter)
+
+    await client.otp.send(TEST_DATA.phone.primary, '999000', {
+      template: 'login_code',
+      language: 'ar',
+      button: false,
+    })
+
+    expect(adapter.sendMessage).toHaveBeenCalledWith({
+      type: 'template',
+      to: TEST_DATA.phone.primary,
+      template: {
+        name: 'login_code',
+        language: 'ar',
+        components: [{ type: 'body', parameters: [{ type: 'text', text: '999000' }] }],
+      },
+    })
+  })
+
+  test('otp.send() rejects an empty code', async () => {
+    const adapter = createMockAdapter()
+    const client = new WhatsAppClient(adapter)
+
+    await expect(
+      client.otp.send(TEST_DATA.phone.primary, '   ', { template: 'login_code' }),
+    ).rejects.toBeInstanceOf(ValidationError)
+    expect(adapter.sendMessage).not.toHaveBeenCalled()
+  })
+})
+
+describe('lifecycle', () => {
+  test('destroy() delegates to the adapter', () => {
+    const destroy = mock(() => {})
+    const adapter = createMockAdapter({ destroy })
+    const client = new WhatsAppClient(adapter)
+
+    client.destroy()
+
+    expect(destroy).toHaveBeenCalledTimes(1)
+  })
+
+  test('destroy() is a no-op when the adapter has none', () => {
+    const adapter = createMockAdapter()
+    delete (adapter as unknown as Record<string, unknown>)['destroy']
+    const client = new WhatsAppClient(adapter)
+
+    expect(() => client.destroy()).not.toThrow()
   })
 })

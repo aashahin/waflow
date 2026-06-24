@@ -297,6 +297,49 @@ describe('mapOutboundToCloudApi', () => {
         }),
       ).toThrow(ValidationError)
     })
+
+    test('throws ValidationError when total rows across sections exceed 10', () => {
+      // 2 sections, 6 rows each = 12 rows total (within the 10-section limit,
+      // but over WhatsApp's 10-rows-total binding limit).
+      const sections = Array.from({ length: 2 }, (_, s) => ({
+        title: `Section ${s}`,
+        rows: Array.from({ length: 6 }, (_, r) => ({
+          id: `s${s}-item${r}`,
+          title: `Item ${s}-${r}`,
+        })),
+      }))
+
+      expect(() =>
+        mapOutboundToCloudApi({
+          type: 'interactive.list',
+          to: TEST_DATA.phone.primary,
+          body: 'Browse:',
+          buttonText: 'View',
+          sections,
+        }),
+      ).toThrow(ValidationError)
+    })
+
+    test('allows exactly 10 rows total across multiple sections', () => {
+      // 2 sections, 5 rows each = 10 rows total — at the limit, should not throw.
+      const sections = Array.from({ length: 2 }, (_, s) => ({
+        title: `Section ${s}`,
+        rows: Array.from({ length: 5 }, (_, r) => ({
+          id: `s${s}-item${r}`,
+          title: `Item ${s}-${r}`,
+        })),
+      }))
+
+      expect(() =>
+        mapOutboundToCloudApi({
+          type: 'interactive.list',
+          to: TEST_DATA.phone.primary,
+          body: 'Browse:',
+          buttonText: 'View',
+          sections,
+        }),
+      ).not.toThrow()
+    })
   })
 
   describe('phone normalization', () => {

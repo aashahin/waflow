@@ -153,6 +153,29 @@ await wa.message.interactive.list(
 )
 ```
 
+### One-Time Passwords (OTP)
+
+Authentication templates have a special structure — the code goes in the body
+*and* in the copy-code / one-tap autofill button. `wa.otp.send()` assembles that
+payload for you from an approved `AUTHENTICATION` template, so you don't hand-build
+template components:
+
+```typescript
+// Fills both the body placeholder and the copy-code / one-tap button.
+await wa.otp.send('+966501234567', '123456', { template: 'login_code' })
+
+// Custom language; drop the button if your template doesn't have one:
+await wa.otp.send('+966501234567', '123456', {
+  template: 'login_code',
+  language: 'ar',
+  button: false,
+})
+```
+
+waflow does **not** auto-retry sends on network/timeout (see [Retry](#retry)), so a
+dropped response won't deliver a second code. On Wati, the code is sent as the
+template's body parameter (Wati auth templates have no button component).
+
 ### Media Operations
 
 ```typescript
@@ -228,15 +251,18 @@ new Elysia()
     return challenge
   })
   // Incoming events are POSTed here
-  .post('/webhook', async ({ body, request }) => {
-    // Verify signature
+  .post('/webhook', async ({ request }) => {
+    // Read the RAW body exactly once. The signature must be verified against the
+    // unparsed bytes, so don't rely on a framework-parsed `body` (reading it
+    // first can leave `request.text()` empty).
     const rawBody = await request.text()
     const signature = request.headers.get('x-hub-signature-256') ?? ''
-    const isValid = await wa.webhook.verify(rawBody, signature)
-    if (!isValid) return new Response('Invalid signature', { status: 401 })
+    if (!(await wa.webhook.verify(rawBody, signature))) {
+      return new Response('Invalid signature', { status: 401 })
+    }
 
     // Parse and handle events
-    const events = wa.webhook.parse(body)
+    const events = wa.webhook.parse(JSON.parse(rawBody))
     for (const event of events) {
       // ... handle events
     }
@@ -248,21 +274,40 @@ new Elysia()
 #### Webhook Verification (Hono / Cloudflare Workers)
 
 ```typescript
-import { createWhatsApp } from 'waflow'
+import { createWhatsApp, type WhatsAppClient } from 'waflow'
 import { Hono } from 'hono'
 
-const app = new Hono()
+type Env = {
+  WA_PHONE_ID: string
+  WA_ACCESS_TOKEN: string
+  WA_APP_SECRET: string
+  WA_VERIFY_TOKEN: string
+}
+
+// Construct ONE client per isolate and reuse it across requests. Building a new
+// client per request would reset the rate limiter every time and arm a timer
+// per request. (Workers expose env via `c.env`, not module scope, so memoize.)
+let wa: WhatsAppClient | undefined
+const getClient = (env: Env): WhatsAppClient =>
+  (wa ??= createWhatsApp({
+    provider: 'cloud-api',
+    phoneNumberId: env.WA_PHONE_ID,
+    accessToken: env.WA_ACCESS_TOKEN,
+    appSecret: env.WA_APP_SECRET,
+    webhookVerifyToken: env.WA_VERIFY_TOKEN,
+  }))
+
+const app = new Hono<{ Bindings: Env }>()
 
 app.get('/webhook', (c) => {
-  const wa = createWhatsApp({ /* ... */ })
-  const challenge = wa.webhook.handleChallenge(
+  const challenge = getClient(c.env).webhook.handleChallenge(
     Object.fromEntries(new URL(c.req.url).searchParams),
   )
   return challenge ? c.text(challenge) : c.text('Forbidden', 403)
 })
 
 app.post('/webhook', async (c) => {
-  const wa = createWhatsApp({ /* ... */ })
+  const wa = getClient(c.env)
   const rawBody = await c.req.text()
   const signature = c.req.header('x-hub-signature-256') ?? ''
   if (!(await wa.webhook.verify(rawBody, signature))) {
@@ -276,6 +321,10 @@ app.post('/webhook', async (c) => {
 export default app
 ```
 
+> If you genuinely need a per-request client (e.g. per-tenant credentials), call
+> `wa.destroy()` in a `finally` block to release the rate limiter's timer and
+> queued waiters.
+
 ## Providers
 
 ### WhatsApp Cloud API
@@ -285,7 +334,7 @@ Direct Meta Graph API integration. The reference provider — supports all featu
 ```typescript
 const wa = createWhatsApp({
   provider: 'cloud-api',
-  phoneNumberId: '123456789', // in waty phoneNumberId equals phone number in E.164 format, e.g. '96611111111'
+  phoneNumberId: '123456789',        // the Phone Number ID from Meta Business Manager
   accessToken: 'EAAx...',
   apiVersion: 'v25.0',               // optional, default: v25.0
   webhookVerifyToken: 'my-token',     // optional, for webhook challenge
@@ -317,11 +366,21 @@ const wa = createWhatsApp({
   apiKey: 'your-wati-bearer-token',
   baseUrl: 'https://live-mt-server.wati.io/300305', // required, tenant-specific
   channelNumber: '201012345678',                    // required for WATI template sends
-  webhookSecret: 'your-secret',                      // optional
+  webhookSecret: 'your-secret',                      // optional, only for a signing gateway (see capability note)
 })
 ```
 
-> **Note:** Wati does not support interactive messages, reactions, stickers, location, or contacts. Calling these will throw `UnsupportedFeatureError`. Use `wa.supports()` to check at runtime.
+> **Note:** Wati does not support interactive messages, reactions, stickers,
+> location, contacts, read receipts, or media download/delete. Calling these
+> throws `UnsupportedFeatureError` — guard with `wa.supports()` at runtime.
+>
+> Wati sends require a media **URL**, not a media ID. `wa.media.upload()` on Wati
+> therefore returns `{ id, url }` — pass `result.url` to your send:
+>
+> ```typescript
+> const { url } = await wa.media.upload({ file, mimeType: 'image/png' })
+> await wa.message.image('+966501234567', { url })
+> ```
 
 ## Switch Providers
 
@@ -349,6 +408,14 @@ const events = wa.webhook.parse(body)
 
 ## Feature Detection
 
+> ⚠️ **"Switch providers, change nothing" holds only for the common subset.**
+> Every method exists on the client for *every* provider, but a provider that
+> doesn't support a feature throws `UnsupportedFeatureError` **at runtime, not
+> compile time**. If you build on Cloud API's `interactive`, `reaction`,
+> `location`, `media.download`, or `template.management` and switch to Wati, those
+> calls throw. Check the [support table](#feature-detection) and guard with
+> `wa.supports(...)` for any feature outside text + templates + media upload.
+
 Not all providers support all features. Check at runtime:
 
 ```typescript
@@ -375,8 +442,13 @@ Available features:
 | `sticker` | ✅ | ✅ | ❌ |
 | `location` | ✅ | ✅ | ❌ |
 | `contacts` | ✅ | ✅ | ❌ |
-| `webhook.signature_verification` | ✅ | ✅ | ✅ |
+| `webhook.signature_verification` | ✅ | ✅ | ❌¹ |
 | `webhook.challenge` | ✅ | ❌ | ❌ |
+
+> ¹ **Wati does not natively sign its webhooks**, so there is no signature to
+> verify — `supports('webhook.signature_verification')` returns `false`. Secure
+> Wati webhooks with an IP allowlist, or front them with a gateway that adds an
+> HMAC header (`wa.webhook.verify()` will then work against your gateway's secret).
 
 ## Configuration
 
@@ -387,15 +459,32 @@ const wa = createWhatsApp({
   provider: 'cloud-api',
   // ...credentials
   retry: {
-    maxRetries: 3,     // default: 3
-    baseDelay: 1000,   // default: 1000ms
-    maxDelay: 30000,   // default: 30000ms
+    maxRetries: 3,             // default: 3
+    baseDelay: 1000,           // default: 1000ms
+    maxDelay: 30000,           // default: 30000ms
+    retryNonIdempotent: false, // default: false — see below
   },
 })
 ```
 
-Retries on: `429 Rate Limited`, `5xx Server Error`, network failures, timeouts.
-Respects `Retry-After` header. Uses exponential backoff with ±25% jitter.
+Retry policy is **idempotency-aware** to avoid duplicate delivery:
+
+- **`429 Rate Limited`** is always retried — the request was rejected before
+  processing, so there's no duplicate risk.
+- **Network failures, timeouts, and `5xx`** are retried for *idempotent*
+  operations (reads, deletes) but **not** for sends, template creation, or
+  uploads. A timed-out OTP send is therefore **not** auto-retried, so users
+  never receive two codes.
+- Set **`retryNonIdempotent: true`** to also retry sends on ambiguous failures —
+  only do this if you supply your own idempotency/dedup layer.
+
+Uses exponential backoff with ±25% jitter. `Retry-After` is respected and capped
+at `maxDelay` so a large value can't park an edge function past its time budget.
+
+> **Idempotency for OTP:** the Cloud API has no idempotency key, so a retried
+> send can duplicate a message. waflow's default (no send retries) avoids this.
+> For at-least-once delivery with dedup, keep your own key (e.g. in KV/Upstash
+> for ~60s) and enable `retryNonIdempotent`.
 
 ### Rate Limiting
 
@@ -405,11 +494,27 @@ const wa = createWhatsApp({
   // ...credentials
   rateLimit: {
     maxRequestsPerSecond: 80, // default: 80 (Cloud API limit)
+    maxQueueSize: 10000,      // default: 10000 — reject (don't buffer) beyond this
+    queueTimeoutMs: 30000,    // default: 30000 — max wait for a token before TimeoutError
   },
 })
 ```
 
-Token bucket algorithm. Queues requests when at capacity — no dropped requests.
+Token bucket algorithm with FIFO fairness. When the bucket is empty, callers
+queue for the next token; the queue is **bounded** (overflow rejects with a
+`RateLimitError` instead of growing memory) and each waiter times out after
+`queueTimeoutMs` (so a request never hangs forever before its fetch starts).
+
+> ⚠️ **The limiter is per-client-instance and per-isolate — it is NOT
+> distributed.** It only smooths requests flowing through *one* client in *one*
+> isolate/process. Two consequences on Cloudflare Workers:
+> 1. **Construct the client once** (module scope), not per request — see the
+>    Workers example above. A fresh client per request resets the bucket every
+>    time, so it never actually throttles.
+> 2. Workers freezes `Date.now()` during synchronous execution, so token refill
+>    only advances across I/O. For a true cross-isolate limit (e.g. honoring
+>    Meta's per-number messaging tier under high-volume OTP), back it with a
+>    Durable Object or Upstash Redis rather than this in-memory limiter.
 
 ### Timeout
 
@@ -478,6 +583,36 @@ const wa = createWhatsApp({
 const result = await wa.message.text('+966501234567', 'Hello')
 console.log(result.raw) // full Meta API response
 ```
+
+### Raw Webhook Payload
+
+By default, parsed webhook events do **not** retain the full raw payload (so a
+single POST yielding many events doesn't keep N copies of the body in memory).
+Opt in with `includeRawWebhook` to populate `event.metadata.raw`:
+
+```typescript
+const wa = createWhatsApp({
+  provider: 'cloud-api',
+  // ...credentials
+  includeRawWebhook: true,
+})
+```
+
+### Cleanup
+
+A client holds a rate-limiter timer. When you create a client you won't reuse
+(e.g. a short-lived/per-request client), release it when done:
+
+```typescript
+const wa = createWhatsApp({ /* ... */ })
+try {
+  await wa.message.text(to, 'hi')
+} finally {
+  wa.destroy()
+}
+```
+
+Long-lived singletons (the recommended pattern) don't need this.
 
 ## Error Handling
 

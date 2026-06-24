@@ -15,7 +15,7 @@ import type { CloudApiSendResponse, CloudApiMediaUploadResponse, CloudApiMediaUr
 import { HttpClient } from '../../core/http.js'
 import { RateLimiter } from '../../core/rate-limiter.js'
 import { noopLogger, type Logger } from '../../core/logger.js'
-import { UnsupportedFeatureError } from '../../core/errors.js'
+import { UnsupportedFeatureError, ProviderError } from '../../core/errors.js'
 import { mapOutboundToCloudApi } from '../cloud-api/mapper.js'
 import { parseCloudApiWebhook } from '../cloud-api/webhook-parser.js'
 import { getResponseBodyStream } from '../cloud-api/index.js'
@@ -78,6 +78,15 @@ export class Dialog360Provider implements WhatsAppProviderAdapter {
 
     const messageId = response.data.messages[0]?.id ?? ''
 
+    if (!messageId) {
+      throw new ProviderError({
+        message: 'Provider returned no message ID — the send may not have succeeded',
+        provider: this.name,
+        statusCode: response.status,
+        raw: response.data,
+      })
+    }
+
     return {
       messageId,
       provider: this.name,
@@ -107,11 +116,17 @@ export class Dialog360Provider implements WhatsAppProviderAdapter {
     if (params.file instanceof Blob) {
       formData.set('file', params.file, params.filename ?? 'file')
     } else if (params.file instanceof ReadableStream) {
+      // The ReadableStream branch still buffers the whole stream into memory via
+      // `new Response(stream).blob()` — unavoidable with fetch FormData. Callers
+      // with very large media should prefer URL-based sends where supported.
       const response = new Response(params.file)
       const blob = await response.blob()
       formData.set('file', blob, params.filename ?? 'file')
     } else {
-      const blob = new Blob([params.file.slice()], { type: params.mimeType })
+      // Uint8Array — pass the view directly. Blob already copies the bytes, so an
+      // extra `.slice()` here would just double peak memory for no benefit. The
+      // cast is type-only (Uint8Array<ArrayBufferLike> → BlobPart); it copies nothing.
+      const blob = new Blob([params.file as BlobPart], { type: params.mimeType })
       formData.set('file', blob, params.filename ?? 'file')
     }
 
@@ -180,7 +195,7 @@ export class Dialog360Provider implements WhatsAppProviderAdapter {
   // -- Webhooks (reuses Cloud API parser) ---------------------------------
 
   parseWebhook(body: unknown): WebhookEvent[] {
-    return parseCloudApiWebhook(body, '360dialog')
+    return parseCloudApiWebhook(body, '360dialog', { includeRaw: this.options.includeRawWebhook ?? false })
   }
 
   async verifyWebhookSignature(body: string, signature: string): Promise<boolean> {
@@ -195,6 +210,11 @@ export class Dialog360Provider implements WhatsAppProviderAdapter {
 
   supports(feature: ProviderFeature): boolean {
     return SUPPORTED_FEATURES.has(feature)
+  }
+
+  /** Release the rate limiter's pending timer and queued waiters. */
+  destroy(): void {
+    this.http.destroy()
   }
 
   protected assertSupported(feature: ProviderFeature): void {

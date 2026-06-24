@@ -17,10 +17,16 @@ import { mapOutboundToWati } from './mapper.js'
 import { parseWatiWebhook } from './webhook-parser.js'
 import { verifyHmacSha256 } from '../../utils/crypto.js'
 
-/** Features supported by the Wati provider */
+/**
+ * Features supported by the Wati provider.
+ *
+ * Note: 'webhook.signature_verification' is intentionally absent — Wati does NOT
+ * natively sign its webhooks (no HMAC signature header). `verifyWebhookSignature`
+ * is kept functional only for callers who front Wati with their own signing
+ * proxy/gateway that adds an HMAC.
+ */
 const SUPPORTED_FEATURES = new Set<ProviderFeature>([
   'media.upload',
-  'webhook.signature_verification',
 ])
 
 function extractMessageIdFromRecord(record: Record<string, unknown>): string {
@@ -149,9 +155,12 @@ export class WatiProvider implements WhatsAppProviderAdapter {
     }
   }
 
-  async markAsRead(_messageId: string): Promise<void> {
-    // Wati does not support programmatic read receipts
-    this.logger.warn('markAsRead is not supported by the Wati provider')
+  async markAsRead(): Promise<void> {
+    // Wati does not support programmatic read receipts (read_receipts ❌).
+    throw new UnsupportedFeatureError({
+      message: 'markAsRead (read receipts) is not supported by the Wati provider',
+      provider: 'wati',
+    })
   }
 
   // -- Media --------------------------------------------------------------
@@ -162,11 +171,17 @@ export class WatiProvider implements WhatsAppProviderAdapter {
     if (params.file instanceof Blob) {
       formData.set('file', params.file, params.filename ?? 'file')
     } else if (params.file instanceof ReadableStream) {
+      // The ReadableStream branch still buffers the whole stream into memory via
+      // `new Response(stream).blob()` — unavoidable with fetch FormData. Callers
+      // with very large media should prefer URL-based sends where supported.
       const response = new Response(params.file)
       const blob = await response.blob()
       formData.set('file', blob, params.filename ?? 'file')
     } else {
-      const blob = new Blob([params.file.slice()], { type: params.mimeType })
+      // Uint8Array — pass the view directly. Blob already copies the bytes, so an
+      // extra `.slice()` here would just double peak memory for no benefit. The
+      // cast is type-only (Uint8Array<ArrayBufferLike> → BlobPart); it copies nothing.
+      const blob = new Blob([params.file as BlobPart], { type: params.mimeType })
       formData.set('file', blob, params.filename ?? 'file')
     }
 
@@ -175,7 +190,9 @@ export class WatiProvider implements WhatsAppProviderAdapter {
       formData,
     )
 
-    return { id: response.data.id ?? response.data.url ?? '' }
+    // Wati sends require a URL (the mapper throws on a media id), so surface the
+    // URL alongside the id. Callers should pass `url` to subsequent message sends.
+    return { id: response.data.id ?? response.data.url ?? '', url: response.data.url }
   }
 
   async getMediaUrl(_mediaId: string): Promise<MediaUrlResult> {
@@ -202,9 +219,14 @@ export class WatiProvider implements WhatsAppProviderAdapter {
   // -- Webhooks -----------------------------------------------------------
 
   parseWebhook(body: unknown): WebhookEvent[] {
-    return parseWatiWebhook(body)
+    return parseWatiWebhook(body, { includeRaw: this.options.includeRawWebhook ?? false })
   }
 
+  // Wati does NOT natively sign its webhooks — it sends no HMAC signature header.
+  // This verification therefore only works when the caller fronts Wati with their
+  // own signing proxy/gateway that adds an HMAC over the raw body using
+  // `webhookSecret`. Without a `webhookSecret` configured it returns false, and
+  // `supports('webhook.signature_verification')` returns false accordingly.
   async verifyWebhookSignature(body: string, signature: string): Promise<boolean> {
     if (!this.config.webhookSecret) {
       this.logger.warn('verifyWebhookSignature called but no webhookSecret configured')
@@ -217,5 +239,10 @@ export class WatiProvider implements WhatsAppProviderAdapter {
 
   supports(feature: ProviderFeature): boolean {
     return SUPPORTED_FEATURES.has(feature)
+  }
+
+  /** Release the rate limiter's pending timer and queued waiters. */
+  destroy(): void {
+    this.http.destroy()
   }
 }

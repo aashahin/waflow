@@ -13,7 +13,7 @@ import type { CloudApiSendResponse, CloudApiMediaUploadResponse, CloudApiMediaUr
 import { HttpClient } from '../../core/http.js'
 import { RateLimiter } from '../../core/rate-limiter.js'
 import { noopLogger, type Logger } from '../../core/logger.js'
-import { UnsupportedFeatureError, MediaError, ValidationError } from '../../core/errors.js'
+import { UnsupportedFeatureError, MediaError, ValidationError, ProviderError } from '../../core/errors.js'
 import { mapOutboundToCloudApi } from './mapper.js'
 import { parseCloudApiWebhook } from './webhook-parser.js'
 import { verifyHmacSha256 } from '../../utils/crypto.js'
@@ -80,6 +80,15 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
 
     const messageId = response.data.messages[0]?.id ?? ''
 
+    if (!messageId) {
+      throw new ProviderError({
+        message: 'Provider returned no message ID — the send may not have succeeded',
+        provider: this.name,
+        statusCode: response.status,
+        raw: response.data,
+      })
+    }
+
     return {
       messageId,
       provider: this.name,
@@ -109,13 +118,17 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
     if (params.file instanceof Blob) {
       formData.set('file', params.file, params.filename ?? 'file')
     } else if (params.file instanceof ReadableStream) {
-      // Convert ReadableStream to Blob for FormData
+      // The ReadableStream branch still buffers the whole stream into memory via
+      // `new Response(stream).blob()` — unavoidable with fetch FormData. Callers
+      // with very large media should prefer URL-based sends where supported.
       const response = new Response(params.file)
       const blob = await response.blob()
       formData.set('file', blob, params.filename ?? 'file')
     } else {
-      // Uint8Array
-      const blob = new Blob([params.file.slice()], { type: params.mimeType })
+      // Uint8Array — pass the view directly. Blob already copies the bytes, so an
+      // extra `.slice()` here would just double peak memory for no benefit. The
+      // cast is type-only (Uint8Array<ArrayBufferLike> → BlobPart); it copies nothing.
+      const blob = new Blob([params.file as BlobPart], { type: params.mimeType })
       formData.set('file', blob, params.filename ?? 'file')
     }
 
@@ -185,7 +198,7 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
   // -- Webhooks -----------------------------------------------------------
 
   parseWebhook(body: unknown): WebhookEvent[] {
-    return parseCloudApiWebhook(body, 'cloud-api')
+    return parseCloudApiWebhook(body, 'cloud-api', { includeRaw: this.options.includeRawWebhook ?? false })
   }
 
   async verifyWebhookSignature(body: string, signature: string): Promise<boolean> {
@@ -260,29 +273,22 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
   async createTemplate(input: CreateTemplateInput): Promise<Template> {
     const wabaId = this.getWabaId()
 
-    const components = input.components.map((component) => ({
-      ...component,
-      type: component.type.toLowerCase(),
-      ...(component.format ? { format: component.format.toLowerCase() } : {}),
-      ...(component.buttons
-        ? {
-            buttons: component.buttons.map((button) => ({
-              ...button,
-              type: button.type.toLowerCase(),
-            })),
-          }
-        : {}),
-    }))
-
+    // Meta's CREATE template endpoint requires UPPERCASE enums for category,
+    // component `type`/`format`, and button `type` (e.g. BODY/HEADER, UTILITY,
+    // TEXT/IMAGE, QUICK_REPLY/URL). Send them AS-IS — lowercasing here makes Meta
+    // reject the request with a (#100) error. (The SEND path in mapper.ts uses
+    // lowercase, which is correct for that endpoint.) Extra/auth fields
+    // (add_security_recommendation, code_expiration_minutes, otp_type) flow
+    // through untouched.
     const response = await this.http.request<CloudApiCreateTemplateResponse>({
       method: 'POST',
       path: `/${wabaId}/message_templates`,
       body: {
         name: input.name,
         language: input.language,
-        category: input.category.toLowerCase(),
+        category: input.category,
         parameter_format: 'positional',
-        components,
+        components: input.components,
       },
     })
 
@@ -310,6 +316,13 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
 
   supports(feature: ProviderFeature): boolean {
     return SUPPORTED_FEATURES.has(feature)
+  }
+
+  // -- Lifecycle ----------------------------------------------------------
+
+  /** Release the rate limiter's pending timer and queued waiters. */
+  destroy(): void {
+    this.http.destroy()
   }
 
   // -- Utility for subclasses (360Dialog) ---------------------------------

@@ -260,3 +260,16 @@ export interface LocationPayload {
   name?: string
   address?: string
 }
+
+export interface OtpSendOptions {
+  /** The approved AUTHENTICATION template name to send the code with. */
+  template: string
+  /** BCP-47 language code of the template (default: "en_US"). */
+  language?: string
+  /**
+   * Also fill the template's copy-code / one-tap autofill button with the code
+   * (default: true). Set false if your authentication template has no button.
+   * Ignored by providers whose templates only use a body placeholder (Wati).
+   */
+  button?: boolean
+}

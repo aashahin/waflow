@@ -22,11 +22,12 @@ import type {
   SectionDef,
   TemplateComponent,
   InteractiveHeader,
+  OtpSendOptions,
 } from './types/messages.js'
 import type { MediaUpload, MediaUploadResult, MediaUrlResult, MediaDownloadResult } from './types/media.js'
 import type { Template, CreateTemplateInput } from './types/templates.js'
 import type { WebhookEvent } from './types/webhooks.js'
-import { UnsupportedFeatureError } from './core/errors.js'
+import { UnsupportedFeatureError, ValidationError } from './core/errors.js'
 
 export class WhatsAppClient {
   private readonly adapter: WhatsAppProviderAdapter
@@ -46,6 +47,9 @@ export class WhatsAppClient {
   /** Template operations */
   readonly template: TemplateNamespace
 
+  /** One-time-password (authentication template) helper */
+  readonly otp: OtpNamespace
+
   constructor(adapter: WhatsAppProviderAdapter) {
     this.adapter = adapter
     this.provider = adapter.name
@@ -53,11 +57,30 @@ export class WhatsAppClient {
     this.media = new MediaNamespace(adapter)
     this.webhook = new WebhookNamespace(adapter)
     this.template = new TemplateNamespace(adapter)
+    this.otp = new OtpNamespace(adapter)
   }
 
   /** Check if the current provider supports a specific feature */
   supports(feature: ProviderFeature): boolean {
     return this.adapter.supports(feature)
+  }
+
+  /**
+   * Release resources held by the client (the rate limiter's pending timer and
+   * any queued waiters). Call when you're done with a client you won't reuse —
+   * e.g. a per-request client on an edge runtime. Safe to call more than once.
+   *
+   * ```ts
+   * const wa = createWhatsApp({ ... })
+   * try {
+   *   await wa.message.text(to, 'hi')
+   * } finally {
+   *   wa.destroy()
+   * }
+   * ```
+   */
+  destroy(): void {
+    this.adapter.destroy?.()
   }
 }
 
@@ -282,8 +305,8 @@ class WebhookNamespace {
   }
 
   /** Parse a raw webhook payload into normalized events */
-  parse(body: unknown, headers?: Record<string, string>): WebhookEvent[] {
-    return this.adapter.parseWebhook(body, headers)
+  parse(body: unknown): WebhookEvent[] {
+    return this.adapter.parseWebhook(body)
   }
 
   /** Verify the cryptographic signature of a webhook payload */
@@ -300,6 +323,63 @@ class WebhookNamespace {
       return null
     }
     return this.adapter.handleVerificationChallenge(query)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// otp.*
+// ---------------------------------------------------------------------------
+
+class OtpNamespace {
+  private readonly adapter: WhatsAppProviderAdapter
+
+  constructor(adapter: WhatsAppProviderAdapter) {
+    this.adapter = adapter
+  }
+
+  /**
+   * Send a one-time password using an approved AUTHENTICATION template.
+   *
+   * Builds the correct auth-template payload — the code is placed in the body
+   * and (by default) in the copy-code / one-tap autofill button — so callers
+   * don't have to assemble template components by hand.
+   *
+   * @example
+   * ```ts
+   * await wa.otp.send('+966501234567', '123456', { template: 'login_code' })
+   * ```
+   */
+  async send(to: string, code: string, options: OtpSendOptions): Promise<SendResult> {
+    const trimmed = code.trim()
+    if (!trimmed) {
+      throw new ValidationError({
+        message: 'otp.send requires a non-empty code',
+        provider: this.adapter.name,
+      })
+    }
+
+    const components: TemplateComponent[] = [
+      { type: 'body', parameters: [{ type: 'text', text: trimmed }] },
+    ]
+    if (options.button !== false) {
+      // Auth templates carry the code again in the URL/copy-code button.
+      components.push({
+        type: 'button',
+        sub_type: 'url',
+        index: 0,
+        parameters: [{ type: 'text', text: trimmed }],
+      })
+    }
+
+    return this.adapter.sendMessage({
+      type: 'template',
+      to,
+      template: {
+        name: options.template,
+        language: options.language ?? 'en_US',
+        components,
+      },
+    })
   }
 }
 

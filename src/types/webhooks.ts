@@ -177,6 +177,10 @@ export interface WebhookMetadata {
   phoneNumberId?: string
   /** Display phone number (when available) */
   displayPhoneNumber?: string
-  /** Raw webhook payload for debugging */
-  raw: unknown
+  /**
+   * Raw webhook payload for debugging. Only populated when the client is
+   * created with `includeRawWebhook: true` (otherwise `undefined` to avoid
+   * retaining the full body on every event).
+   */
+  raw?: unknown
 }

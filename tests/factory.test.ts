@@ -49,6 +49,19 @@ describe('createWhatsApp', () => {
     ).toThrow(ValidationError)
   })
 
+  test('throws when cloud-api credentials are missing', () => {
+    expect(() =>
+      createWhatsApp({ provider: 'cloud-api', phoneNumberId: '', accessToken: 'x' } as any),
+    ).toThrow(ValidationError)
+    expect(() =>
+      createWhatsApp({ provider: 'cloud-api', phoneNumberId: '123', accessToken: '  ' } as any),
+    ).toThrow(ValidationError)
+  })
+
+  test('throws when 360dialog apiKey is missing', () => {
+    expect(() => createWhatsApp({ provider: '360dialog' } as any)).toThrow(ValidationError)
+  })
+
   test('passes client options to provider', () => {
     // Should not throw with valid options
     const wa = createWhatsApp({
@@ -127,6 +140,7 @@ describe('feature detection', () => {
     expect(wa.supports('media.upload')).toBe(true)
     expect(wa.supports('media.download')).toBe(false)
     expect(wa.supports('reaction')).toBe(false)
-    expect(wa.supports('webhook.signature_verification')).toBe(true)
+    // WATI does not natively sign webhooks — see WatiProvider for details.
+    expect(wa.supports('webhook.signature_verification')).toBe(false)
   })
 })

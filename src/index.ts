@@ -20,6 +20,7 @@ import { CloudApiProvider } from './providers/cloud-api/index.js'
 import { Dialog360Provider } from './providers/360dialog/index.js'
 import { WatiProvider } from './providers/wati/index.js'
 import { assertNever } from './utils/assert.js'
+import { ValidationError } from './core/errors.js'
 
 /**
  * Create a new WhatsApp client configured for a specific provider.
@@ -39,6 +40,7 @@ import { assertNever } from './utils/assert.js'
  * ```
  */
 export function createWhatsApp(config: CreateWhatsAppConfig): WhatsAppClient {
+  validateProviderConfig(config)
   const adapter = createAdapter(config)
   return new WhatsAppClient(adapter)
 }
@@ -68,6 +70,35 @@ function extractClientOptions(config: CreateWhatsAppConfig): ClientOptions {
     timeout: config.timeout,
     hooks: config.hooks,
     includeRawResponse: config.includeRawResponse,
+  }
+}
+
+/** Fail fast with a clear error when required credentials are missing. */
+function validateProviderConfig(config: CreateWhatsAppConfig): void {
+  const requireField = (value: unknown, field: string): void => {
+    if (typeof value !== 'string' || !value.trim()) {
+      throw new ValidationError({
+        message: `${config.provider} config requires a non-empty "${field}"`,
+        provider: config.provider,
+      })
+    }
+  }
+
+  switch (config.provider) {
+    case 'cloud-api':
+      requireField(config.phoneNumberId, 'phoneNumberId')
+      requireField(config.accessToken, 'accessToken')
+      break
+    case '360dialog':
+      requireField(config.apiKey, 'apiKey')
+      break
+    case 'wati':
+      requireField(config.apiKey, 'apiKey')
+      requireField(config.baseUrl, 'baseUrl')
+      requireField(config.channelNumber, 'channelNumber')
+      break
+    default:
+      assertNever(config)
   }
 }
 
