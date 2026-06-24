@@ -44,8 +44,13 @@ export function parseCloudApiWebhook(
       // Parse incoming messages
       if (value.messages) {
         // Index contacts once per change instead of scanning per message.
-        const contactsByWaId = new Map((value.contacts ?? []).map(c => [c.wa_id, c]))
-        const fallbackContact = value.contacts?.[0]
+        // Keep the FIRST entry per wa_id to match the previous `find()` semantics.
+        const contacts = value.contacts ?? []
+        const contactsByWaId = new Map<string, (typeof contacts)[number]>()
+        for (const c of contacts) {
+          if (!contactsByWaId.has(c.wa_id)) contactsByWaId.set(c.wa_id, c)
+        }
+        const fallbackContact = contacts[0]
         for (const msg of value.messages) {
           const contact = contactsByWaId.get(msg.from) ?? fallbackContact
           events.push({

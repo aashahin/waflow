@@ -277,11 +277,9 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
     // component `type`/`format`, and button `type` (e.g. BODY/HEADER, UTILITY,
     // TEXT/IMAGE, QUICK_REPLY/URL). Send them AS-IS — lowercasing here makes Meta
     // reject the request with a (#100) error. (The SEND path in mapper.ts uses
-    // lowercase, which is correct for that endpoint.) We keep spreading
-    // `...component` / `...button` so any extra fields (e.g.
-    // add_security_recommendation, code_expiration_minutes, otp_type) pass through.
-    const components = input.components.map((component) => ({ ...component }))
-
+    // lowercase, which is correct for that endpoint.) Extra/auth fields
+    // (add_security_recommendation, code_expiration_minutes, otp_type) flow
+    // through untouched.
     const response = await this.http.request<CloudApiCreateTemplateResponse>({
       method: 'POST',
       path: `/${wabaId}/message_templates`,
@@ -290,7 +288,7 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
         language: input.language,
         category: input.category,
         parameter_format: 'positional',
-        components,
+        components: input.components,
       },
     })
 

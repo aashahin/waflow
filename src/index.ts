@@ -75,7 +75,7 @@ function extractClientOptions(config: CreateWhatsAppConfig): ClientOptions {
 
 /** Fail fast with a clear error when required credentials are missing. */
 function validateProviderConfig(config: CreateWhatsAppConfig): void {
-  const require = (value: unknown, field: string): void => {
+  const requireField = (value: unknown, field: string): void => {
     if (typeof value !== 'string' || !value.trim()) {
       throw new ValidationError({
         message: `${config.provider} config requires a non-empty "${field}"`,
@@ -86,16 +86,16 @@ function validateProviderConfig(config: CreateWhatsAppConfig): void {
 
   switch (config.provider) {
     case 'cloud-api':
-      require(config.phoneNumberId, 'phoneNumberId')
-      require(config.accessToken, 'accessToken')
+      requireField(config.phoneNumberId, 'phoneNumberId')
+      requireField(config.accessToken, 'accessToken')
       break
     case '360dialog':
-      require(config.apiKey, 'apiKey')
+      requireField(config.apiKey, 'apiKey')
       break
     case 'wati':
-      require(config.apiKey, 'apiKey')
-      require(config.baseUrl, 'baseUrl')
-      require(config.channelNumber, 'channelNumber')
+      requireField(config.apiKey, 'apiKey')
+      requireField(config.baseUrl, 'baseUrl')
+      requireField(config.channelNumber, 'channelNumber')
       break
     default:
       assertNever(config)

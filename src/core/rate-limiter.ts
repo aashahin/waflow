@@ -94,6 +94,9 @@ export class RateLimiter {
    */
   async acquire(): Promise<void> {
     this.refill()
+    // Serve already-queued waiters first (FIFO) with any tokens that refilled —
+    // don't make them wait for the next drain-timer tick when a token is free now.
+    this.drain()
 
     if (this.tokens >= 1 && this.waitQueue.length === 0) {
       this.tokens -= 1
