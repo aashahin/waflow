@@ -62,6 +62,7 @@ export interface IncomingImageMessage {
   mimeType: string
   sha256?: string
   caption?: string
+  url?: string
 }
 
 export interface IncomingVideoMessage {
@@ -70,6 +71,7 @@ export interface IncomingVideoMessage {
   mimeType: string
   sha256?: string
   caption?: string
+  url?: string
 }
 
 export interface IncomingAudioMessage {
@@ -78,6 +80,7 @@ export interface IncomingAudioMessage {
   mimeType: string
   sha256?: string
   voice?: boolean
+  url?: string
 }
 
 export interface IncomingDocumentMessage {
@@ -87,6 +90,7 @@ export interface IncomingDocumentMessage {
   sha256?: string
   filename?: string
   caption?: string
+  url?: string
 }
 
 export interface IncomingLocationMessage {

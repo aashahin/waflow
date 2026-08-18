@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test'
-import { verifyHmacSha256 } from '../../src/utils/crypto.js'
+import { timingSafeEqual, verifyHmacSha256 } from '../../src/utils/crypto.js'
 
 describe('verifyHmacSha256', () => {
   const secret = 'test-secret-key-32-chars-minimum'
@@ -65,5 +65,15 @@ describe('verifyHmacSha256', () => {
   test('rejects signatures of different lengths', async () => {
     expect(await verifyHmacSha256(body, 'abc', secret)).toBe(false)
     expect(await verifyHmacSha256(body, '', secret)).toBe(false)
+  })
+})
+
+describe('timingSafeEqual', () => {
+  test('equal strings pass and unequal fail', () => {
+    expect(timingSafeEqual('abc', 'abc')).toBe(true)
+    expect(timingSafeEqual('', '')).toBe(true)
+    expect(timingSafeEqual('abc', 'abd')).toBe(false)
+    expect(timingSafeEqual('abc', 'ab')).toBe(false)
+    expect(timingSafeEqual('', 'a')).toBe(false)
   })
 })

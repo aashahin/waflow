@@ -82,37 +82,49 @@ function parseMessageContent(payload: WatiWebhookPayload): IncomingMessage {
     case 'text':
       return { type: 'text', body: payload.text ?? '' }
 
-    case 'image':
+    case 'image': {
+      const mediaUrl = firstString(payload.mediaUrl, payload.data)
       return {
         type: 'image',
-        mediaId: firstString(payload.mediaUrl, payload.data),
+        mediaId: mediaUrl,
         mimeType: payload.mimeType ?? 'image/jpeg',
         caption: payload.caption,
+        ...(mediaUrl ? { url: mediaUrl } : {}),
       }
+    }
 
-    case 'video':
+    case 'video': {
+      const mediaUrl = firstString(payload.mediaUrl, payload.data)
       return {
         type: 'video',
-        mediaId: firstString(payload.mediaUrl, payload.data),
+        mediaId: mediaUrl,
         mimeType: payload.mimeType ?? 'video/mp4',
         caption: payload.caption,
+        ...(mediaUrl ? { url: mediaUrl } : {}),
       }
+    }
 
-    case 'audio':
+    case 'audio': {
+      const mediaUrl = firstString(payload.mediaUrl, payload.data)
       return {
         type: 'audio',
-        mediaId: firstString(payload.mediaUrl, payload.data),
+        mediaId: mediaUrl,
         mimeType: payload.mimeType ?? 'audio/ogg',
+        ...(mediaUrl ? { url: mediaUrl } : {}),
       }
+    }
 
-    case 'document':
+    case 'document': {
+      const mediaUrl = firstString(payload.mediaUrl, payload.data)
       return {
         type: 'document',
-        mediaId: firstString(payload.mediaUrl, payload.data),
+        mediaId: mediaUrl,
         mimeType: payload.mimeType ?? 'application/octet-stream',
         filename: payload.filename,
         caption: payload.caption,
+        ...(mediaUrl ? { url: mediaUrl } : {}),
       }
+    }
 
     case 'location':
       return {
@@ -194,6 +206,9 @@ function firstString(...values: Array<string | undefined>): string {
 
 function detectEventType(payload: WatiWebhookPayload): string {
   if (payload.errorCode !== undefined || payload.errorMessage) return 'error'
+  if (payload.waId && (payload.text || payload.type)) {
+    return 'message'
+  }
   if (payload.statusString) return 'status'
   if (payload.waId) return 'message'
   return 'unknown'
@@ -204,12 +219,12 @@ function detectEventType(payload: WatiWebhookPayload): string {
  * Wati's API doesn't document the exact format, so we handle both gracefully.
  */
 function parseWatiTimestamp(raw?: string): Date {
-  if (!raw) return new Date()
+  if (!raw) return new Date(0)
   // If the timestamp is all digits, treat as Unix epoch (seconds)
   if (/^\d+$/.test(raw)) {
     return new Date(parseInt(raw, 10) * 1000)
   }
   // Otherwise, try ISO string parsing
   const date = new Date(raw)
-  return isNaN(date.getTime()) ? new Date() : date
+  return isNaN(date.getTime()) ? new Date(0) : date
 }

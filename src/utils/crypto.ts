@@ -61,7 +61,7 @@ function arrayBufferToHex(buffer: ArrayBuffer): string {
  * Uses charCodeAt (not codePointAt) since we only compare ASCII hex digests.
  * charCodeAt returns NaN for out-of-bounds, which becomes 0 via bitwise OR.
  */
-function timingSafeEqual(a: string, b: string): boolean {
+export function timingSafeEqual(a: string, b: string): boolean {
   const maxLen = Math.max(a.length, b.length)
   // XOR lengths — non-zero if different, contributing to final result
   let result = a.length ^ b.length

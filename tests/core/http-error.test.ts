@@ -81,6 +81,53 @@ describe('throwForHttpError', () => {
     }
   })
 
+  test('maps Graph 131048 on HTTP 400 to ProviderError, not RateLimitError', () => {
+    try {
+      throwForHttpError({
+        status: 400,
+        method: 'POST',
+        path: '/messages',
+        provider: 'cloud-api',
+        raw: { error: { code: 131048, message: 'Spam rate limit' } },
+        retryAfterHeader: null,
+      })
+      throw new Error('expected throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderError)
+      expect(error).not.toBeInstanceOf(RateLimitError)
+    }
+  })
+
+  test('maps Graph 131056 on HTTP 400 to ProviderError, not RateLimitError', () => {
+    try {
+      throwForHttpError({
+        status: 400,
+        method: 'POST',
+        path: '/messages',
+        provider: 'cloud-api',
+        raw: { error: { code: 131056, message: 'Pair rate limit' } },
+        retryAfterHeader: null,
+      })
+      throw new Error('expected throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderError)
+      expect(error).not.toBeInstanceOf(RateLimitError)
+    }
+  })
+
+  test('HTTP 429 is still RateLimitError', () => {
+    expect(() =>
+      throwForHttpError({
+        status: 429,
+        method: 'POST',
+        path: '/messages',
+        provider: 'cloud-api',
+        raw: { error: { message: 'Too many requests' } },
+        retryAfterHeader: '2',
+      }),
+    ).toThrow(RateLimitError)
+  })
+
   test('maps WhatsApp 131047 to ProviderError, not ValidationError', () => {
     expect(() =>
       throwForHttpError({

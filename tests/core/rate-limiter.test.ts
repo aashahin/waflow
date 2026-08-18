@@ -66,7 +66,13 @@ describe('RateLimiter', () => {
     await limiter.acquire() // consumes the only token
     const queued = limiter.acquire() // fills the queue (will resolve later)
 
-    await expect(limiter.acquire()).rejects.toBeInstanceOf(RateLimitError)
+    try {
+      await limiter.acquire()
+      throw new Error('expected throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(RateLimitError)
+      expect((error as RateLimitError).retryable).toBe(false)
+    }
 
     limiter.destroy()
     await expect(queued).rejects.toBeInstanceOf(TimeoutError)

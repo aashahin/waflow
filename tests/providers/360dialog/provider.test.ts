@@ -1,5 +1,6 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test'
 import { Dialog360Provider } from '../../../src/providers/360dialog/index.js'
+import { MediaError, ValidationError } from '../../../src/core/errors.js'
 import type { Dialog360Config, ClientOptions } from '../../../src/types/config.js'
 import type { WhatsAppProviderAdapter } from '../../../src/types/provider.js'
 
@@ -91,6 +92,10 @@ describe('Dialog360Provider', () => {
 
     test('does NOT support template.management', () => {
       expect(provider.supports('template.management')).toBe(false)
+    })
+
+    test('does not support webhook.signature_verification when webhookSecret is undefined', () => {
+      expect(createProvider({ webhookSecret: undefined }).supports('webhook.signature_verification')).toBe(false)
     })
   })
 
@@ -216,9 +221,94 @@ describe('Dialog360Provider', () => {
       expect(provider.name).toBe('360dialog')
     })
 
+    test('uploadMedia throws MediaError when provider returns empty body', async () => {
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response('', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })),
+      ) as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        await expect(
+          provider.uploadMedia({ file: new Uint8Array([1, 2, 3]), mimeType: 'image/png' }),
+        ).rejects.toThrow(MediaError)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('getMediaUrl throws MediaError when provider returns empty body', async () => {
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response('', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })),
+      ) as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        await expect(provider.getMediaUrl(TEST_DATA.mediaId.media123)).rejects.toThrow(MediaError)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
     test('defaults base URL when not provided', () => {
       const provider = createProvider({ baseUrl: undefined })
       expect(provider.name).toBe('360dialog')
+    })
+
+    test('does not send D360-API-KEY to Meta CDNs', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) =>
+        Promise.resolve(
+          new Response('ok', {
+            status: 200,
+            headers: { 'content-type': 'image/jpeg' },
+          }),
+        ),
+      )
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        await provider.downloadMedia('https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1')
+
+        const headers = (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.headers as Record<string, string>
+        expect(headers['D360-API-KEY']).toBeUndefined()
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('refuses private download URLs', async () => {
+      const provider = createProvider()
+      await expect(provider.downloadMedia('http://127.0.0.1/latest')).rejects.toBeInstanceOf(ValidationError)
+    })
+
+    test('defaults to no download timeout so a slow body is not aborted', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+        await new Promise(r => setTimeout(r, 40))
+        expect(init?.signal?.aborted).toBe(false)
+        return new Response('ok', {
+          status: 200,
+          headers: { 'content-type': 'image/jpeg' },
+        })
+      })
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider({}, { timeout: 10, retry: { maxRetries: 0 } })
+        const result = await provider.downloadMedia('https://waba-v2.360dialog.io/media/1')
+        expect(result.mimeType).toBe('image/jpeg')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
     })
 
     test('sends messages to /messages (not /{phoneNumberId}/messages)', async () => {

@@ -25,9 +25,7 @@ import { verifyHmacSha256 } from '../../utils/crypto.js'
  * is kept functional only for callers who front Wati with their own signing
  * proxy/gateway that adds an HMAC.
  */
-const SUPPORTED_FEATURES = new Set<ProviderFeature>([
-  'media.upload',
-])
+const SUPPORTED_FEATURES = new Set<ProviderFeature>([])
 
 function extractMessageIdFromRecord(record: Record<string, unknown>): string {
   const candidates = [record.localMessageId, record.messageId, record.id]
@@ -166,35 +164,12 @@ export class WatiProvider implements WhatsAppProviderAdapter {
 
   // -- Media --------------------------------------------------------------
 
-  async uploadMedia(params: MediaUpload): Promise<MediaUploadResult> {
-    const formData = new FormData()
-
-    if (params.file instanceof Blob) {
-      formData.set('file', params.file, params.filename ?? 'file')
-    } else if (params.file instanceof ReadableStream) {
-      // The ReadableStream branch still buffers the whole stream into memory via
-      // `new Response(stream).blob()` — unavoidable with fetch FormData. Callers
-      // with very large media should prefer URL-based sends where supported.
-      const response = new Response(params.file)
-      const blob = await response.blob()
-      formData.set('file', blob, params.filename ?? 'file')
-    } else {
-      // Uint8Array — pass the view directly. Blob already copies the bytes, so an
-      // extra `.slice()` here would just double peak memory for no benefit. The
-      // cast is type-only (Uint8Array<ArrayBufferLike> → BlobPart); it copies nothing.
-      const blob = new Blob([params.file as BlobPart], { type: params.mimeType })
-      formData.set('file', blob, params.filename ?? 'file')
-    }
-
-    const response = await this.http.uploadRequest<{ id?: string; url?: string }>(
-      '/api/v1/media',
-      formData,
-      { timeout: params.timeout },
-    )
-
-    // Wati sends require a URL (the mapper throws on a media id), so surface the
-    // URL alongside the id. Callers should pass `url` to subsequent message sends.
-    return { id: response.data.id ?? response.data.url ?? '', url: response.data.url }
+  async uploadMedia(_params: MediaUpload): Promise<MediaUploadResult> {
+    throw new UnsupportedFeatureError({
+      message:
+        'Wati has no separate media upload API. Pass a public URL to message.image/video/audio/document instead.',
+      provider: 'wati',
+    })
   }
 
   async getMediaUrl(_mediaId: string): Promise<MediaUrlResult> {

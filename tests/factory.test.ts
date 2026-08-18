@@ -148,6 +148,7 @@ describe('feature detection', () => {
       provider: 'cloud-api',
       phoneNumberId: TEST_DATA.config.cloudApi.phoneNumberId,
       accessToken: TEST_DATA.config.cloudApi.accessToken,
+      webhookVerifyToken: TEST_DATA.config.cloudApi.webhookVerifyToken,
     })
 
     expect(wa.supports('interactive.button')).toBe(true)
@@ -156,6 +157,17 @@ describe('feature detection', () => {
     expect(wa.supports('media.download')).toBe(true)
     expect(wa.supports('template.management')).toBe(true)
     expect(wa.supports('webhook.challenge')).toBe(true)
+  })
+
+  test('cloud-api webhook features require secrets', () => {
+    const wa = createWhatsApp({
+      provider: 'cloud-api',
+      phoneNumberId: TEST_DATA.config.cloudApi.phoneNumberId,
+      accessToken: TEST_DATA.config.cloudApi.accessToken,
+    })
+
+    expect(wa.supports('webhook.challenge')).toBe(false)
+    expect(wa.supports('webhook.signature_verification')).toBe(false)
   })
 
   test('360dialog does not support webhook.challenge', () => {
@@ -167,6 +179,7 @@ describe('feature detection', () => {
     expect(wa.supports('interactive.button')).toBe(true)
     expect(wa.supports('webhook.challenge')).toBe(false)
     expect(wa.supports('template.management')).toBe(false)
+    expect(wa.supports('webhook.signature_verification')).toBe(false)
   })
 
   test('wati has limited feature support', () => {
@@ -179,7 +192,7 @@ describe('feature detection', () => {
 
     expect(wa.supports('interactive.button')).toBe(false)
     expect(wa.supports('interactive.list')).toBe(false)
-    expect(wa.supports('media.upload')).toBe(true)
+    expect(wa.supports('media.upload')).toBe(false)
     expect(wa.supports('media.download')).toBe(false)
     expect(wa.supports('reaction')).toBe(false)
     // WATI does not natively sign webhooks — see WatiProvider for details.

@@ -1,6 +1,6 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test'
 import { CloudApiProvider } from '../../../src/providers/cloud-api/index.js'
-import { ValidationError } from '../../../src/core/errors.js'
+import { MediaError, ProviderError, ValidationError } from '../../../src/core/errors.js'
 import type { CloudApiConfig, ClientOptions } from '../../../src/types/config.js'
 
 // ---------------------------------------------------------------------------
@@ -95,6 +95,18 @@ describe('CloudApiProvider', () => {
     test('supports webhook.challenge', () => {
       expect(provider.supports('webhook.challenge')).toBe(true)
     })
+
+    test('does not support webhook.signature_verification when appSecret is undefined', () => {
+      expect(createProvider({ appSecret: undefined }).supports('webhook.signature_verification')).toBe(false)
+    })
+
+    test('does not support webhook.challenge when webhookVerifyToken is undefined', () => {
+      expect(createProvider({ webhookVerifyToken: undefined }).supports('webhook.challenge')).toBe(false)
+    })
+
+    test('does not support webhook.challenge when webhookVerifyToken is empty', () => {
+      expect(createProvider({ webhookVerifyToken: '' }).supports('webhook.challenge')).toBe(false)
+    })
   })
 
   describe('sendMessage', () => {
@@ -175,7 +187,10 @@ describe('CloudApiProvider', () => {
     })
 
     test('rejects invalid verify token', () => {
-      const provider = createProvider()
+      const warn = mock((_msg: string, _meta?: Record<string, unknown>) => {})
+      const provider = createProvider({}, {
+        logger: { debug() {}, info() {}, warn, error() {} },
+      })
 
       const result = provider.handleVerificationChallenge({
         'hub.mode': 'subscribe',
@@ -184,6 +199,10 @@ describe('CloudApiProvider', () => {
       })
 
       expect(result).toBeNull()
+      expect(warn).toHaveBeenCalled()
+      const logged = JSON.stringify(warn.mock.calls[0] ?? [])
+      expect(logged).not.toContain('wrong-token')
+      expect(logged).not.toContain('verify-me')
     })
 
     test('rejects non-subscribe mode', () => {
@@ -362,6 +381,30 @@ describe('CloudApiProvider', () => {
       }
     })
 
+    test('createTemplate throws ProviderError when provider returns empty body', async () => {
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response('', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })),
+      ) as unknown as typeof fetch
+
+      try {
+        const provider = createProvider({ wabaId: 'waba-789' })
+        await expect(
+          provider.createTemplate({
+            name: 'empty_body',
+            language: 'en_US',
+            category: 'UTILITY',
+            components: [{ type: 'BODY', text: 'Hi' }],
+          }),
+        ).rejects.toBeInstanceOf(ProviderError)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
     test('createTemplate honors parameterFormat named', async () => {
       const originalFetch = globalThis.fetch
       const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) =>
@@ -439,9 +482,93 @@ describe('CloudApiProvider', () => {
       }
     })
 
+    test('does not send the access token to graph.facebook.com', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) =>
+        Promise.resolve(
+          new Response('ok', {
+            status: 200,
+            headers: { 'content-type': 'image/jpeg' },
+          }),
+        ),
+      )
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        await provider.downloadMedia('https://graph.facebook.com/v25.0/123')
+
+        const headers = (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.headers as Record<string, string>
+        expect(headers['Authorization']).toBeUndefined()
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
     test('refuses private download URLs', async () => {
       const provider = createProvider()
-      await expect(provider.downloadMedia('http://127.0.0.1/latest')).rejects.toThrow()
+      await expect(provider.downloadMedia('http://127.0.0.1/latest')).rejects.toBeInstanceOf(ValidationError)
+    })
+
+    test('defaults to no download timeout so a slow body is not aborted', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+        await new Promise(r => setTimeout(r, 40))
+        expect(init?.signal?.aborted).toBe(false)
+        return new Response('ok', {
+          status: 200,
+          headers: { 'content-type': 'image/jpeg' },
+        })
+      })
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider({}, { timeout: 10, retry: { maxRetries: 0 } })
+        const result = await provider.downloadMedia(
+          'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1',
+        )
+        expect(result.mimeType).toBe('image/jpeg')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+  })
+
+  describe('media upload and url', () => {
+    test('uploadMedia throws MediaError when provider returns empty body', async () => {
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response('', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })),
+      ) as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        await expect(
+          provider.uploadMedia({ file: new Uint8Array([1, 2, 3]), mimeType: 'image/png' }),
+        ).rejects.toThrow(MediaError)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('getMediaUrl throws MediaError when provider returns empty body', async () => {
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = mock(() =>
+        Promise.resolve(new Response('', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })),
+      ) as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        await expect(provider.getMediaUrl(TEST_DATA.mediaId.media123)).rejects.toThrow(MediaError)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
     })
   })
 })

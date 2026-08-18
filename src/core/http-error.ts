@@ -8,7 +8,7 @@ import {
 } from './errors.js'
 
 const AUTH_CODES = new Set([10, 102, 104, 190, 200])
-const RATE_LIMIT_CODES = new Set([4, 32, 613, 80007, 130429, 131048, 131056, 133016])
+const RATE_LIMIT_CODES = new Set([4, 32, 613, 80007, 130429, 133016])
 
 export interface GraphErrorInfo {
   code: number | undefined

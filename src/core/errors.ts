@@ -13,6 +13,7 @@ export class WhatsAppError extends Error {
   readonly provider: string
   readonly statusCode: number | undefined
   readonly raw: unknown
+  readonly retryable: boolean | undefined
 
   constructor(opts: {
     code: WhatsAppErrorCode
@@ -21,6 +22,7 @@ export class WhatsAppError extends Error {
     statusCode?: number
     raw?: unknown
     cause?: unknown
+    retryable?: boolean
   }) {
     super(opts.message, { cause: opts.cause })
     this.name = 'WhatsAppError'
@@ -28,6 +30,7 @@ export class WhatsAppError extends Error {
     this.provider = opts.provider ?? 'unknown'
     this.statusCode = opts.statusCode
     this.raw = opts.raw
+    this.retryable = opts.retryable
   }
 }
 

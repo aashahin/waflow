@@ -1,6 +1,6 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test'
 import { WatiProvider } from '../../../src/providers/wati/index.js'
-import { ProviderError } from '../../../src/core/errors.js'
+import { ProviderError, UnsupportedFeatureError } from '../../../src/core/errors.js'
 import type { WatiConfig, ClientOptions } from '../../../src/types/config.js'
 import type { WhatsAppProviderAdapter } from '../../../src/types/provider.js'
 
@@ -58,8 +58,8 @@ describe('WatiProvider', () => {
       provider = createProvider()
     })
 
-    test('supports media.upload', () => {
-      expect(provider.supports('media.upload')).toBe(true)
+    test('does NOT support media.upload', () => {
+      expect(provider.supports('media.upload')).toBe(false)
     })
 
     test('does NOT support webhook.signature_verification (Wati does not natively sign webhooks)', () => {
@@ -104,6 +104,16 @@ describe('WatiProvider', () => {
 
     test('does NOT support webhook.challenge', () => {
       expect(provider.supports('webhook.challenge')).toBe(false)
+    })
+  })
+
+  describe('media', () => {
+    test('uploadMedia rejects with UnsupportedFeatureError', async () => {
+      const provider = createProvider()
+
+      await expect(
+        provider.uploadMedia({ file: new Blob(['x']), mimeType: 'image/jpeg' }),
+      ).rejects.toBeInstanceOf(UnsupportedFeatureError)
     })
   })
 
@@ -179,6 +189,43 @@ describe('WatiProvider', () => {
 
         expect(parsedBody['channel_number']).toBe('201012345678')
         expect(parsedBody['template_name']).toBe('order_confirm')
+
+        const calledUrl = fetchMock.mock.calls[0]?.[0] as string
+        expect(calledUrl).toContain(`whatsappNumber=${TEST_DATA.phone.primaryNormalized}`)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('sends session file URL as query params, not JSON body', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ result: true, localMessageId: 'wati-file-1' }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        ),
+      )
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        const result = await provider.sendMessage({
+          type: 'image',
+          to: TEST_DATA.phone.primary,
+          image: { url: 'https://example.com/img.jpg', caption: 'Photo' },
+        })
+
+        expect(result.messageId).toBe('wati-file-1')
+
+        const calledUrl = fetchMock.mock.calls[0]?.[0] as string
+        expect(calledUrl).toContain(`/api/v1/sendSessionFile/${TEST_DATA.phone.primaryNormalized}`)
+        expect(calledUrl).toContain(`url=${encodeURIComponent('https://example.com/img.jpg')}`)
+        expect(calledUrl).toContain('caption=Photo')
+
+        const calledInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined
+        expect(calledInit?.body).toBeUndefined()
       } finally {
         globalThis.fetch = originalFetch
       }

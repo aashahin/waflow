@@ -3,6 +3,43 @@
 All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/) (pre-1.0: breaking changes bump the minor).
 
+## 0.6.0
+
+Second production audit: downloads, Wati correctness, retry/SSRF hardening.
+
+### Breaking
+
+- **Wati `media.upload` is unsupported.** There is no Wati upload API;
+  `supports('media.upload')` is `false` and `uploadMedia` throws
+  `UnsupportedFeatureError`. Pass a public URL to sends.
+- **Wati `sendSessionFile` sends the file URL as a query param**, not a JSON body.
+- **Wati `broadcast_name` is unique per send** again (`waflow_${name}_${ts}_${rand}`)
+  so repeat OTP/template sends to the same number are not dropped.
+- **`supports('webhook.signature_verification')` / `supports('webhook.challenge')`**
+  are false unless the matching secret/token is configured.
+- **Graph `#131048` / `#131056`** are `ProviderError` (not retried), not
+  `RateLimitError`.
+- **`media.download` defaults to no SDK timeout** so the body stream is not
+  aborted at 30s. Pass `{ timeout }` to cap TTFB.
+
+### Fixed
+
+- User abort is a non-retryable `NetworkError`, not `TimeoutError`.
+- Timeout detection no longer requires `instanceof DOMException`.
+- Local rate-limiter queue-full is not retried.
+- `downloadMedia` does not forward Cloud API tokens to `graph.facebook.com` or
+  360dialog API keys to Meta CDNs.
+- SSRF guard rejects expanded IPv6 loopback, IPv4-mapped hex, decimal IPv4,
+  and leading-zero IPv4.
+- Wati inbound webhooks with `statusString: "SENT"` and no `eventType` parse as
+  messages, not status events.
+- Wati template flatten includes header text params; `language` and
+  `replyContextId` are forwarded.
+- Wati missing timestamps use epoch, not `Date.now()`.
+- Empty upload / getMediaUrl / createTemplate bodies throw typed errors.
+- Webhook challenge compare is constant-time and no longer logs the token.
+- Request timeout timers are unref'd; `makeRequestSignal` cleans up listeners.
+
 ## 0.5.0
 
 Production audit: correctness, webhook resilience, and credential hygiene.

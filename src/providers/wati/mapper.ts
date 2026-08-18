@@ -22,8 +22,6 @@ export interface WatiMappedRequest {
   query?: Record<string, string>
   /** JSON body */
   body?: Record<string, unknown>
-  /** If true, use multipart/form-data instead of JSON */
-  multipart?: boolean
 }
 
 /**
@@ -44,6 +42,9 @@ export function mapOutboundToWati(message: OutboundMessage): WatiMappedRequest {
         path: `/api/v1/sendSessionMessage/${phone}`,
         body: {
           messageText: message.text.body,
+          ...(message.context?.messageId
+            ? { replyContextId: message.context.messageId }
+            : {}),
         },
       }
 
@@ -54,8 +55,11 @@ export function mapOutboundToWati(message: OutboundMessage): WatiMappedRequest {
         query: { whatsappNumber: phone },
         body: {
           template_name: message.template.name,
-          broadcast_name: `waflow_${message.template.name}`,
+          broadcast_name: `waflow_${message.template.name}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
           parameters: flattenTemplateParameters(message.template.components),
+          ...(message.template.language
+            ? { language: message.template.language }
+            : {}),
         },
       }
 
@@ -64,9 +68,9 @@ export function mapOutboundToWati(message: OutboundMessage): WatiMappedRequest {
       return {
         method: 'POST',
         path: `/api/v1/sendSessionFile/${phone}`,
-        body: {
+        query: {
           url: imageUrl,
-          caption: message.image.caption ?? '',
+          ...(message.image.caption ? { caption: message.image.caption } : {}),
         },
       }
     }
@@ -76,9 +80,9 @@ export function mapOutboundToWati(message: OutboundMessage): WatiMappedRequest {
       return {
         method: 'POST',
         path: `/api/v1/sendSessionFile/${phone}`,
-        body: {
+        query: {
           url: videoUrl,
-          caption: message.video.caption ?? '',
+          ...(message.video.caption ? { caption: message.video.caption } : {}),
         },
       }
     }
@@ -88,9 +92,7 @@ export function mapOutboundToWati(message: OutboundMessage): WatiMappedRequest {
       return {
         method: 'POST',
         path: `/api/v1/sendSessionFile/${phone}`,
-        body: {
-          url: audioUrl,
-        },
+        query: { url: audioUrl },
       }
     }
 
@@ -99,10 +101,10 @@ export function mapOutboundToWati(message: OutboundMessage): WatiMappedRequest {
       return {
         method: 'POST',
         path: `/api/v1/sendSessionFile/${phone}`,
-        body: {
+        query: {
           url: docUrl,
-          caption: message.document.caption ?? '',
-          filename: message.document.filename ?? '',
+          ...(message.document.caption ? { caption: message.document.caption } : {}),
+          ...(message.document.filename ? { filename: message.document.filename } : {}),
         },
       }
     }
@@ -143,8 +145,9 @@ function flattenTemplateParameters(
   const params: Array<{ name: string; value: string }> = []
   let index = 1
 
-  for (const component of components) {
-    if (component.type === 'body') {
+  for (const componentType of ['header', 'body'] as const) {
+    for (const component of components) {
+      if (component.type !== componentType) continue
       for (const param of component.parameters) {
         if (param.type === 'text') {
           params.push({ name: param.name?.trim() || String(index), value: param.text })
@@ -167,7 +170,7 @@ function extractWatiMediaUrl(source: MediaSource & { caption?: string; filename?
     return source.url
   }
   throw new UnsupportedFeatureError({
-    message: `Wati requires a URL for ${mediaType} messages. Media ID references are not supported — upload your file and use the URL instead.`,
+    message: `Wati requires a public URL for ${mediaType} messages. Media ID references are not supported.`,
     provider: 'wati',
   })
 }

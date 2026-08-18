@@ -105,11 +105,11 @@ export class HttpClient {
 
       this.safeHook('onRequest', { url, method: opts.method, body: opts.body })
 
-      this.config.logger.debug(`${opts.method} ${url}`)
+      this.log('debug', `${opts.method} ${url}`)
 
       const response = await this.doFetch(url, {
         method: opts.method,
-        headers: this.headersForUrl(url, headers),
+        headers: this.headersForUrl(opts.path, headers),
         body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
         timeout,
         signal: opts.signal,
@@ -125,7 +125,7 @@ export class HttpClient {
 
       const data = await this.parseJsonBody<T>(response, opts)
 
-      this.config.logger.debug(`${opts.method} ${url} → ${response.status} (${durationMs}ms)`)
+      this.log('debug', `${opts.method} ${url} → ${response.status} (${durationMs}ms)`)
 
       return {
         status: response.status,
@@ -158,7 +158,7 @@ export class HttpClient {
 
       const response = await this.doFetch(url, {
         method: opts.method,
-        headers: this.headersForUrl(url, headers),
+        headers: this.headersForUrl(opts.path, headers),
         body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
         timeout,
         signal: opts.signal,
@@ -212,7 +212,7 @@ export class HttpClient {
 
       const response = await this.doFetch(url, {
         method: 'POST',
-        headers: this.headersForUrl(url, headers),
+        headers: this.headersForUrl(path, headers),
         body: formData,
         timeout,
         signal: options?.signal,
@@ -286,7 +286,7 @@ export class HttpClient {
         durationMs: payload.durationMs ?? 0,
       })
     } catch (error) {
-      this.config.logger.warn(`hooks.${name} threw`, {
+      this.log('warn', `hooks.${name} threw`, {
         errorMessage: error instanceof Error ? error.message : String(error),
       })
     }
@@ -296,14 +296,20 @@ export class HttpClient {
     try {
       this.config.hooks?.onError?.(error)
     } catch (hookError) {
-      this.config.logger.warn('hooks.onError threw', {
+      this.log('warn', 'hooks.onError threw', {
         errorMessage: hookError instanceof Error ? hookError.message : String(hookError),
       })
     }
   }
 
+  private log(level: 'debug' | 'warn', msg: string, meta?: Record<string, unknown>): void {
+    try {
+      this.config.logger[level](msg, meta)
+    } catch {}
+  }
+
   private headersForUrl(url: string, headers: Record<string, string>): Record<string, string> {
-    if (!isAbsoluteUrl(url) || isTrustedMediaHost(url, this.config.baseUrl)) {
+    if (!isAbsoluteUrl(url) || isTrustedMediaHost(url, this.config.baseUrl, this.config.provider)) {
       return headers
     }
     const stripped = { ...headers }
@@ -329,23 +335,26 @@ export class HttpClient {
       assertSafeFetchUrl(url, this.config.provider)
     }
 
+    const { signal, cleanup } = makeRequestSignal(init.timeout, init.signal ?? this.config.signal)
     try {
       return await fetch(url, {
         method: init.method,
         headers: init.headers,
         body: init.body,
-        signal: makeRequestSignal(init.timeout, init.signal ?? this.config.signal),
+        signal,
       })
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'TimeoutError') {
-        throw new TimeoutError({
-          message: `Request timed out after ${init.timeout}ms: ${init.method} ${url}`,
+      if (init.signal?.aborted || this.config.signal?.aborted) {
+        throw new NetworkError({
+          message: `Request aborted: ${init.method} ${url}`,
           provider: this.config.provider,
+          retryable: false,
         })
       }
-      if (error instanceof DOMException && error.name === 'AbortError') {
+      const name = error instanceof Error ? error.name : ''
+      if (name === 'TimeoutError' || name === 'AbortError') {
         throw new TimeoutError({
-          message: `Request aborted: ${init.method} ${url}`,
+          message: `Request timed out after ${init.timeout}ms: ${init.method} ${url}`,
           provider: this.config.provider,
         })
       }
@@ -354,6 +363,8 @@ export class HttpClient {
         provider: this.config.provider,
         cause: error,
       })
+    } finally {
+      cleanup()
     }
   }
 

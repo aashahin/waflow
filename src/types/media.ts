@@ -18,10 +18,7 @@ export interface MediaUpload {
 export interface MediaUploadResult {
   /** Provider-assigned media ID */
   id: string
-  /**
-   * Direct URL to the uploaded media, when the provider returns one (e.g. WATI).
-   * Pass this URL to message sends.
-   */
+  /** Direct URL to the uploaded media, when the provider returns one. */
   url?: string
 }
 
@@ -37,6 +34,12 @@ export interface MediaUrlResult {
   fileSize?: number
   /** When this URL expires (when available) */
   expiresAt?: Date
+}
+
+/** Options for a media download stream request */
+export interface MediaDownloadOptions {
+  timeout?: number
+  signal?: AbortSignal
 }
 
 /** Result from downloading media — stream-based for memory efficiency */

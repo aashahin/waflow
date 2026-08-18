@@ -24,7 +24,7 @@ import type {
   InteractiveHeader,
   OtpSendOptions,
 } from './types/messages.js'
-import type { MediaUpload, MediaUploadResult, MediaUrlResult, MediaDownloadResult } from './types/media.js'
+import type { MediaUpload, MediaUploadResult, MediaUrlResult, MediaDownloadResult, MediaDownloadOptions } from './types/media.js'
 import type { Template, CreateTemplateInput } from './types/templates.js'
 import type { WebhookEvent } from './types/webhooks.js'
 import { UnsupportedFeatureError, ValidationError } from './core/errors.js'
@@ -283,8 +283,8 @@ class MediaNamespace {
   }
 
   /** Download media as a ReadableStream — pipe directly to R2/S3 */
-  async download(mediaIdOrUrl: string): Promise<MediaDownloadResult> {
-    return this.adapter.downloadMedia(mediaIdOrUrl)
+  async download(mediaIdOrUrl: string, options?: MediaDownloadOptions): Promise<MediaDownloadResult> {
+    return this.adapter.downloadMedia(mediaIdOrUrl, options)
   }
 
   /** Delete a previously uploaded media item */

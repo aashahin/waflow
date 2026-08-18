@@ -87,6 +87,33 @@ describe('withRetry — idempotency-aware policy', () => {
     await expect(withRetry(fn, FAST, noopLogger, { idempotent: true })).rejects.toBe(err)
     expect(calls()).toBe(FAST.maxRetries + 1) // initial attempt + retries
   })
+
+  test('RateLimitError with retryable:false is not retried', async () => {
+    const err = new RateLimitError({ message: 'queue full', retryable: false })
+    const { fn, calls } = failing(err, 1)
+    await expect(withRetry(fn, FAST, noopLogger, { idempotent: true })).rejects.toBe(err)
+    expect(calls()).toBe(1)
+  })
+
+  test('NetworkError with retryable:false is not retried even when idempotent', async () => {
+    const err = new NetworkError({ message: 'Request aborted: GET /x', retryable: false })
+    const { fn, calls } = failing(err, 1)
+    await expect(withRetry(fn, FAST, noopLogger, { idempotent: true })).rejects.toBe(err)
+    expect(calls()).toBe(1)
+  })
+
+  test('logger throws during retry do not fail the request', async () => {
+    const logger = {
+      debug() { throw new Error('debug') },
+      info() { throw new Error('info') },
+      warn() { throw new Error('warn') },
+      error() { throw new Error('error') },
+    }
+    const { fn, calls } = failing(new RateLimitError({ message: 'slow down' }), 1)
+    const result = await withRetry(fn, FAST, logger, { idempotent: false })
+    expect(result).toBe('ok')
+    expect(calls()).toBe(2)
+  })
 })
 
 describe('resolveRetryConfig — validation', () => {

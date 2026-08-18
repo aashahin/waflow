@@ -53,6 +53,35 @@ describe('parseWatiWebhook', () => {
       expect(events[0]?.type).toBe('message')
     })
 
+    test('treats inbound payload with statusString as a message when eventType is absent', () => {
+      const events = parseWatiWebhook({
+        waId: TEST_DATA.phone.primaryNormalized,
+        type: 'text',
+        text: 'hello',
+        statusString: 'SENT',
+      })
+
+      expect(events).toHaveLength(1)
+      expect(events[0]?.type).toBe('message')
+      if (events[0]?.type === 'message' && events[0].message.type === 'text') {
+        expect(events[0].message.body).toBe('hello')
+      }
+    })
+
+    test('uses epoch when timestamp is missing', () => {
+      const events = parseWatiWebhook({
+        eventType: 'message',
+        waId: TEST_DATA.phone.primaryNormalized,
+        type: 'text',
+        text: 'hello',
+      })
+
+      expect(events[0]?.type).toBe('message')
+      if (events[0]?.type === 'message') {
+        expect(events[0].timestamp.getTime()).toBe(0)
+      }
+    })
+
     test('parses image message', () => {
       const events = parseWatiWebhook({
         eventType: 'message',
@@ -69,6 +98,7 @@ describe('parseWatiWebhook', () => {
         expect(events[0].message.type).toBe('image')
         if (events[0].message.type === 'image') {
           expect(events[0].message.mediaId).toBe('https://cdn.wati.io/image.jpg')
+          expect(events[0].message.url).toBe('https://cdn.wati.io/image.jpg')
           expect(events[0].message.mimeType).toBe('image/jpeg')
           expect(events[0].message.caption).toBe('A photo')
         }
@@ -191,6 +221,20 @@ describe('parseWatiWebhook', () => {
 
       expect(events).toHaveLength(1)
       expect(events[0]?.type).toBe('status')
+    })
+
+    test('parses message_status eventType as status', () => {
+      const events = parseWatiWebhook({
+        eventType: 'message_status',
+        statusString: 'delivered',
+        localMessageId: TEST_DATA.messageId.local,
+      })
+
+      expect(events).toHaveLength(1)
+      expect(events[0]?.type).toBe('status')
+      if (events[0]?.type === 'status') {
+        expect(events[0].status).toBe('delivered')
+      }
     })
 
     test('maps "error" statusString to "failed"', () => {

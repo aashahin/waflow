@@ -5,7 +5,7 @@
 import type { WhatsAppProviderAdapter, ProviderFeature } from '../../types/provider.js'
 import type { SendResult, ProviderName } from '../../types/common.js'
 import type { OutboundMessage } from '../../types/messages.js'
-import type { MediaUpload, MediaUploadResult, MediaUrlResult, MediaDownloadResult } from '../../types/media.js'
+import type { MediaUpload, MediaUploadResult, MediaUrlResult, MediaDownloadResult, MediaDownloadOptions } from '../../types/media.js'
 import type { Template, CreateTemplateInput } from '../../types/templates.js'
 import type { WebhookEvent } from '../../types/webhooks.js'
 import type { CloudApiConfig, ClientOptions } from '../../types/config.js'
@@ -13,10 +13,10 @@ import type { CloudApiSendResponse, CloudApiMediaUploadResponse, CloudApiMediaUr
 import { HttpClient } from '../../core/http.js'
 import { RateLimiter } from '../../core/rate-limiter.js'
 import { noopLogger, type Logger } from '../../core/logger.js'
-import { UnsupportedFeatureError, MediaError, ValidationError, ProviderError } from '../../core/errors.js'
+import { MediaError, ValidationError, ProviderError } from '../../core/errors.js'
 import { mapOutboundToCloudApi } from './mapper.js'
 import { parseCloudApiWebhook } from './webhook-parser.js'
-import { verifyHmacSha256 } from '../../utils/crypto.js'
+import { verifyHmacSha256, timingSafeEqual } from '../../utils/crypto.js'
 
 const DEFAULT_API_VERSION = 'v25.0'
 const GRAPH_API_BASE = 'https://graph.facebook.com'
@@ -139,7 +139,17 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
       { timeout: params.timeout },
     )
 
-    return { id: response.data.id }
+    const id = response.data?.id
+    if (typeof id !== 'string' || !id) {
+      throw new MediaError({
+        message: 'Provider returned no media ID',
+        provider: this.name,
+        statusCode: response.status,
+        raw: response.data,
+      })
+    }
+
+    return { id }
   }
 
   async getMediaUrl(mediaId: string): Promise<MediaUrlResult> {
@@ -148,15 +158,25 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
       path: `/${mediaId}`,
     })
 
+    const url = response.data?.url
+    if (typeof url !== 'string' || !url) {
+      throw new MediaError({
+        message: 'Provider returned no media URL',
+        provider: this.name,
+        statusCode: response.status,
+        raw: response.data,
+      })
+    }
+
     return {
-      url: response.data.url,
-      mimeType: response.data.mime_type,
-      sha256: response.data.sha256,
-      fileSize: response.data.file_size ? parseInt(response.data.file_size, 10) : undefined,
+      url,
+      mimeType: response.data?.mime_type,
+      sha256: response.data?.sha256,
+      fileSize: response.data?.file_size ? parseInt(response.data.file_size, 10) : undefined,
     }
   }
 
-  async downloadMedia(mediaIdOrUrl: string): Promise<MediaDownloadResult> {
+  async downloadMedia(mediaIdOrUrl: string, options?: MediaDownloadOptions): Promise<MediaDownloadResult> {
     // If it's a media ID, first get the download URL
     let downloadUrl: string
     let expectedMimeType: string | undefined
@@ -172,6 +192,8 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
     const response = await this.http.rawRequest({
       method: 'GET',
       path: downloadUrl,
+      timeout: options?.timeout ?? 0,
+      signal: options?.signal,
     })
 
     const stream = getResponseBodyStream(response, this.name)
@@ -223,14 +245,16 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
 
     if (
       mode === 'subscribe' &&
-      token === this.config.webhookVerifyToken &&
+      typeof token === 'string' &&
+      token.length > 0 &&
+      timingSafeEqual(token, this.config.webhookVerifyToken) &&
       challenge
     ) {
       this.logger.info('Webhook verification challenge accepted')
       return challenge
     }
 
-    this.logger.warn('Webhook verification challenge rejected', { mode, token })
+    this.logger.warn('Webhook verification challenge rejected', { mode })
     return null
   }
 
@@ -295,8 +319,18 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
       },
     })
 
+    const id = response.data?.id
+    if (typeof id !== 'string' || !id) {
+      throw new ProviderError({
+        message: 'Provider returned no template ID',
+        provider: this.name,
+        statusCode: response.status,
+        raw: response.data,
+      })
+    }
+
     return {
-      id: response.data.id,
+      id,
       name: input.name,
       language: input.language,
       status: toEnum(response.data.status, TEMPLATE_STATUSES, 'PENDING'),
@@ -318,6 +352,12 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
   // -- Capabilities -------------------------------------------------------
 
   supports(feature: ProviderFeature): boolean {
+    if (feature === 'webhook.signature_verification') {
+      return typeof this.config.appSecret === 'string' && this.config.appSecret.length > 0
+    }
+    if (feature === 'webhook.challenge') {
+      return typeof this.config.webhookVerifyToken === 'string' && this.config.webhookVerifyToken.length > 0
+    }
     return SUPPORTED_FEATURES.has(feature)
   }
 
@@ -326,18 +366,6 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
   /** Release the rate limiter's pending timer and queued waiters. */
   destroy(): void {
     this.http.destroy()
-  }
-
-  // -- Utility for subclasses (360Dialog) ---------------------------------
-
-  /** Throws if the given feature is not supported by this provider */
-  protected assertSupported(feature: ProviderFeature): void {
-    if (!this.supports(feature)) {
-      throw new UnsupportedFeatureError({
-        message: `Feature "${feature}" is not supported by the ${this.name} provider`,
-        provider: this.name,
-      })
-    }
   }
 }
 

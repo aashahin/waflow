@@ -16,6 +16,20 @@ describe('mapOutboundToWati', () => {
       expect(result.path).toBe(`/api/v1/sendSessionMessage/${TEST_DATA.phone.primaryNormalized}`)
       expect(result.body).toEqual({ messageText: 'Hello!' })
     })
+
+    test('includes replyContextId when text message has context', () => {
+      const result = mapOutboundToWati({
+        type: 'text',
+        to: TEST_DATA.phone.primary,
+        text: { body: 'Hello!' },
+        context: { messageId: TEST_DATA.messageId.abc },
+      })
+
+      expect(result.body).toEqual({
+        messageText: 'Hello!',
+        replyContextId: TEST_DATA.messageId.abc,
+      })
+    })
   })
 
   describe('template messages', () => {
@@ -36,10 +50,41 @@ describe('mapOutboundToWati', () => {
       expect(result.path).toBe('/api/v2/sendTemplateMessage')
       expect(result.query).toEqual({ whatsappNumber: TEST_DATA.phone.primaryNormalized })
       expect(result.body?.['template_name']).toBe('order_confirm')
-      expect(result.body?.['broadcast_name']).toBe('waflow_order_confirm')
+      expect(typeof result.body?.['broadcast_name']).toBe('string')
+      expect(result.body?.['broadcast_name']).toMatch(/^waflow_order_confirm_/)
+      expect(result.body?.['broadcast_name']).not.toBe('waflow_order_confirm')
       expect(result.body?.['parameters']).toEqual([
         { name: '1', value: 'ORD-1' },
       ])
+    })
+
+    test('generates a unique broadcast_name per send', () => {
+      const message = {
+        type: 'template' as const,
+        to: TEST_DATA.phone.primary,
+        template: {
+          name: 'order_confirm',
+          language: 'en',
+        },
+      }
+
+      const first = mapOutboundToWati(message)
+      const second = mapOutboundToWati(message)
+
+      expect(first.body?.['broadcast_name']).not.toBe(second.body?.['broadcast_name'])
+    })
+
+    test('includes template language on the body', () => {
+      const result = mapOutboundToWati({
+        type: 'template',
+        to: TEST_DATA.phone.primary,
+        template: {
+          name: 'order_confirm',
+          language: 'en',
+        },
+      })
+
+      expect(result.body?.['language']).toBe('en')
     })
 
     test('flattens multiple template body parameters', () => {
@@ -92,7 +137,7 @@ describe('mapOutboundToWati', () => {
       ])
     })
 
-    test('ignores non-body components', () => {
+    test('includes header text parameters before body parameters', () => {
       const result = mapOutboundToWati({
         type: 'template',
         to: TEST_DATA.phone.primary,
@@ -106,9 +151,9 @@ describe('mapOutboundToWati', () => {
         },
       })
 
-      // Only body parameters should be flattened
       expect(result.body?.['parameters']).toEqual([
-        { name: '1', value: 'body-val' },
+        { name: '1', value: 'header-val' },
+        { name: '2', value: 'body-val' },
       ])
     })
   })
@@ -122,8 +167,11 @@ describe('mapOutboundToWati', () => {
       })
 
       expect(result.path).toBe(`/api/v1/sendSessionFile/${TEST_DATA.phone.primaryNormalized}`)
-      expect(result.body?.['url']).toBe('https://example.com/img.jpg')
-      expect(result.body?.['caption']).toBe('Photo')
+      expect(result.body).toBeUndefined()
+      expect(result.query).toEqual({
+        url: 'https://example.com/img.jpg',
+        caption: 'Photo',
+      })
     })
 
     test('throws UnsupportedFeatureError for image with ID', () => {
@@ -143,7 +191,8 @@ describe('mapOutboundToWati', () => {
         video: { url: 'https://example.com/vid.mp4', caption: 'Video' },
       })
 
-      expect(result.body?.['url']).toBe('https://example.com/vid.mp4')
+      expect(result.body).toBeUndefined()
+      expect(result.query?.['url']).toBe('https://example.com/vid.mp4')
     })
 
     test('throws for video with ID', () => {
@@ -163,7 +212,8 @@ describe('mapOutboundToWati', () => {
         audio: { url: 'https://example.com/audio.ogg' },
       })
 
-      expect(result.body?.['url']).toBe('https://example.com/audio.ogg')
+      expect(result.body).toBeUndefined()
+      expect(result.query?.['url']).toBe('https://example.com/audio.ogg')
     })
 
     test('maps document with URL, caption, and filename', () => {
@@ -177,9 +227,12 @@ describe('mapOutboundToWati', () => {
         },
       })
 
-      expect(result.body?.['url']).toBe('https://example.com/doc.pdf')
-      expect(result.body?.['caption']).toBe('Invoice')
-      expect(result.body?.['filename']).toBe('invoice.pdf')
+      expect(result.body).toBeUndefined()
+      expect(result.query).toEqual({
+        url: 'https://example.com/doc.pdf',
+        caption: 'Invoice',
+        filename: 'invoice.pdf',
+      })
     })
   })
 

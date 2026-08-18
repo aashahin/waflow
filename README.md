@@ -192,11 +192,14 @@ await wa.message.image('+966501234567', { id: mediaId })
 // Get media URL
 const { url, mimeType } = await wa.media.getUrl('media-id-123')
 
-// Download as stream — pipe directly to R2/S3
+// Download as stream — no default timeout so large files can pipe to R2/S3
 const { stream, mimeType: type } = await wa.media.download('media-id-123')
 await r2Bucket.put('downloads/file.pdf', stream, {
   httpMetadata: { contentType: type },
 })
+
+// Optional: cap time-to-first-byte, or cancel via AbortSignal
+await wa.media.download('media-id-123', { timeout: 60_000, signal })
 
 // Delete
 await wa.media.delete('media-id-123')
@@ -374,12 +377,10 @@ const wa = createWhatsApp({
 > location, contacts, read receipts, or media download/delete. Calling these
 > throws `UnsupportedFeatureError` — guard with `wa.supports()` at runtime.
 >
-> Wati sends require a media **URL**, not a media ID. `wa.media.upload()` on Wati
-> therefore returns `{ id, url }` — pass `result.url` to your send:
+> Wati has no separate media upload API. Pass a public URL to sends:
 >
 > ```typescript
-> const { url } = await wa.media.upload({ file, mimeType: 'image/png' })
-> await wa.message.image('+966501234567', { url })
+> await wa.message.image('+966501234567', { url: 'https://cdn.example/photo.png' })
 > ```
 
 ## Switch Providers
@@ -433,7 +434,7 @@ Available features:
 |---|:---:|:---:|:---:|
 | `interactive.button` | ✅ | ✅ | ❌ |
 | `interactive.list` | ✅ | ✅ | ❌ |
-| `media.upload` | ✅ | ✅ | ✅ |
+| `media.upload` | ✅ | ✅ | ❌ |
 | `media.download` | ✅ | ✅ | ❌ |
 | `media.delete` | ✅ | ✅ | ❌ |
 | `template.management` | ✅ | ❌ | ❌ |
@@ -449,6 +450,10 @@ Available features:
 > verify — `supports('webhook.signature_verification')` returns `false`. Secure
 > Wati webhooks with an IP allowlist, or front them with a gateway that adds an
 > HMAC header (`wa.webhook.verify()` will then work against your gateway's secret).
+>
+> `supports('webhook.signature_verification')` / `supports('webhook.challenge')`
+> are also **false** on Cloud API / 360dialog when `appSecret` /
+> `webhookSecret` / `webhookVerifyToken` is not configured.
 
 ## Configuration
 
@@ -469,8 +474,12 @@ const wa = createWhatsApp({
 
 Retry policy is **idempotency-aware** to avoid duplicate delivery:
 
-- **`429 Rate Limited`** is always retried — the request was rejected before
-  processing, so there's no duplicate risk.
+- **`429 Rate Limited`** and retryable Graph throughput codes (`#4`, `#32`,
+  `#613`, `#80007`, `#130429`, `#133016`) are retried — the request was
+  rejected before processing, so there's no duplicate risk.
+- **Spam / pair-rate Graph codes (`#131048`, `#131056`)** are `ProviderError`
+  and are **not** retried.
+- **Local queue-full** and **caller abort** are never retried.
 - **Network failures, timeouts, and `5xx`** are retried for *idempotent*
   operations (reads, deletes) but **not** for sends, template creation, or
   uploads. A timed-out OTP send is therefore **not** auto-retried, so users
@@ -522,8 +531,11 @@ queue for the next token; the queue is **bounded** (overflow rejects with a
 const wa = createWhatsApp({
   provider: 'cloud-api',
   // ...credentials
-  timeout: 30_000, // default: 30 seconds
+  timeout: 30_000, // default: 30 seconds (JSON API calls)
 })
+
+// media.download() defaults to no timeout so the body stream is not killed.
+// Override per call: wa.media.download(id, { timeout: 60_000 })
 ```
 
 ### Logger

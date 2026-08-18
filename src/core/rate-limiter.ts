@@ -107,6 +107,7 @@ export class RateLimiter {
     if (this.waitQueue.length >= this.maxQueue) {
       throw new RateLimitError({
         message: `Local rate limiter queue is full (${this.maxQueue}) — too many concurrent requests`,
+        retryable: false,
       })
     }
 

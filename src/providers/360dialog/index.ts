@@ -8,14 +8,14 @@
 import type { WhatsAppProviderAdapter, ProviderFeature } from '../../types/provider.js'
 import type { SendResult } from '../../types/common.js'
 import type { OutboundMessage } from '../../types/messages.js'
-import type { MediaUpload, MediaUploadResult, MediaUrlResult, MediaDownloadResult } from '../../types/media.js'
+import type { MediaUpload, MediaUploadResult, MediaUrlResult, MediaDownloadResult, MediaDownloadOptions } from '../../types/media.js'
 import type { WebhookEvent } from '../../types/webhooks.js'
 import type { Dialog360Config, ClientOptions } from '../../types/config.js'
 import type { CloudApiSendResponse, CloudApiMediaUploadResponse, CloudApiMediaUrlResponse } from '../cloud-api/types.js'
 import { HttpClient } from '../../core/http.js'
 import { RateLimiter } from '../../core/rate-limiter.js'
 import { noopLogger, type Logger } from '../../core/logger.js'
-import { UnsupportedFeatureError, ProviderError } from '../../core/errors.js'
+import { MediaError, ProviderError } from '../../core/errors.js'
 import { mapOutboundToCloudApi } from '../cloud-api/mapper.js'
 import { parseCloudApiWebhook } from '../cloud-api/webhook-parser.js'
 import { getResponseBodyStream } from '../cloud-api/index.js'
@@ -137,7 +137,17 @@ export class Dialog360Provider implements WhatsAppProviderAdapter {
       { timeout: params.timeout },
     )
 
-    return { id: response.data.id }
+    const id = response.data?.id
+    if (typeof id !== 'string' || !id) {
+      throw new MediaError({
+        message: 'Provider returned no media ID',
+        provider: this.name,
+        statusCode: response.status,
+        raw: response.data,
+      })
+    }
+
+    return { id }
   }
 
   async getMediaUrl(mediaId: string): Promise<MediaUrlResult> {
@@ -146,15 +156,25 @@ export class Dialog360Provider implements WhatsAppProviderAdapter {
       path: `/${mediaId}`,
     })
 
+    const url = response.data?.url
+    if (typeof url !== 'string' || !url) {
+      throw new MediaError({
+        message: 'Provider returned no media URL',
+        provider: this.name,
+        statusCode: response.status,
+        raw: response.data,
+      })
+    }
+
     return {
-      url: response.data.url,
-      mimeType: response.data.mime_type,
-      sha256: response.data.sha256,
-      fileSize: response.data.file_size ? parseInt(response.data.file_size, 10) : undefined,
+      url,
+      mimeType: response.data?.mime_type,
+      sha256: response.data?.sha256,
+      fileSize: response.data?.file_size ? parseInt(response.data.file_size, 10) : undefined,
     }
   }
 
-  async downloadMedia(mediaIdOrUrl: string): Promise<MediaDownloadResult> {
+  async downloadMedia(mediaIdOrUrl: string, options?: MediaDownloadOptions): Promise<MediaDownloadResult> {
     let downloadUrl: string
     let expectedMimeType: string | undefined
 
@@ -169,6 +189,8 @@ export class Dialog360Provider implements WhatsAppProviderAdapter {
     const response = await this.http.rawRequest({
       method: 'GET',
       path: downloadUrl,
+      timeout: options?.timeout ?? 0,
+      signal: options?.signal,
     })
 
     const stream = getResponseBodyStream(response, this.name)
@@ -211,6 +233,9 @@ export class Dialog360Provider implements WhatsAppProviderAdapter {
   // -- Capabilities -------------------------------------------------------
 
   supports(feature: ProviderFeature): boolean {
+    if (feature === 'webhook.signature_verification') {
+      return typeof this.config.webhookSecret === 'string' && this.config.webhookSecret.length > 0
+    }
     return SUPPORTED_FEATURES.has(feature)
   }
 
@@ -219,12 +244,4 @@ export class Dialog360Provider implements WhatsAppProviderAdapter {
     this.http.destroy()
   }
 
-  protected assertSupported(feature: ProviderFeature): void {
-    if (!this.supports(feature)) {
-      throw new UnsupportedFeatureError({
-        message: `Feature "${feature}" is not supported by the ${this.name} provider`,
-        provider: this.name,
-      })
-    }
-  }
 }

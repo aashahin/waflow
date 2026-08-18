@@ -232,7 +232,17 @@ describe('media namespace', () => {
     const result = await client.media.download(TEST_DATA.mediaId.media123)
 
     expect(result.mimeType).toBe('image/png')
-    expect(adapter.downloadMedia).toHaveBeenCalledWith(TEST_DATA.mediaId.media123)
+    expect(adapter.downloadMedia).toHaveBeenCalledWith(TEST_DATA.mediaId.media123, undefined)
+  })
+
+  test('media.download() forwards options to adapter', async () => {
+    const adapter = createMockAdapter()
+    const client = new WhatsAppClient(adapter)
+    const options = { timeout: 0 }
+
+    await client.media.download(TEST_DATA.mediaId.media123, options)
+
+    expect(adapter.downloadMedia).toHaveBeenCalledWith(TEST_DATA.mediaId.media123, options)
   })
 
   test('media.delete() delegates to adapter', async () => {

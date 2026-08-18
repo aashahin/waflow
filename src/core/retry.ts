@@ -4,7 +4,7 @@
 
 import type { RetryConfig } from '../types/config.js'
 import type { Logger } from './logger.js'
-import { RateLimitError, NetworkError, TimeoutError, ProviderError } from './errors.js'
+import { RateLimitError, NetworkError, TimeoutError, ProviderError, WhatsAppError } from './errors.js'
 
 const DEFAULT_RETRY_CONFIG = {
   maxRetries: 3,
@@ -51,13 +51,15 @@ export interface RetryPolicy {
 /**
  * Determine if an error is retryable.
  *
- * - `429` is always retryable: the request was rejected before processing, so
- *   there is no duplicate risk.
+ * - `WhatsAppError.retryable === false` is never retried (user abort, local
+ *   queue-full, spam blocks).
+ * - `RateLimitError` is retryable unless `retryable === false`.
  * - Network errors, timeouts, and `5xx` are *ambiguous* (the request may have
  *   landed). They are only retried when the operation is idempotent.
  */
 function isRetryable(error: unknown, canRetryAmbiguous: boolean): boolean {
-  if (error instanceof RateLimitError) return true
+  if (error instanceof WhatsAppError && error.retryable === false) return false
+  if (error instanceof RateLimitError) return error.retryable !== false
   if (error instanceof NetworkError) return canRetryAmbiguous
   if (error instanceof TimeoutError) return canRetryAmbiguous
   if (error instanceof ProviderError) {
@@ -111,7 +113,7 @@ export async function withRetry<T>(
         delay = calculateDelay(attempt, config)
       }
 
-      logger.warn(`Retrying request (attempt ${attempt + 1}/${config.maxRetries})`, {
+      safeLog(logger, `Retrying request (attempt ${attempt + 1}/${config.maxRetries})`, {
         delay,
         errorMessage: error instanceof Error ? error.message : String(error),
       })
@@ -125,4 +127,10 @@ export async function withRetry<T>(
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function safeLog(logger: Logger, msg: string, meta?: Record<string, unknown>): void {
+  try {
+    logger.warn(msg, meta)
+  } catch {}
 }

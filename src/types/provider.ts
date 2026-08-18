@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import type { SendResult } from './common.js'
-import type { MediaDownloadResult, MediaUpload, MediaUploadResult, MediaUrlResult } from './media.js'
+import type { MediaDownloadOptions, MediaDownloadResult, MediaUpload, MediaUploadResult, MediaUrlResult } from './media.js'
 import type { OutboundMessage } from './messages.js'
 import type { CreateTemplateInput, Template } from './templates.js'
 import type { WebhookEvent } from './webhooks.js'
@@ -52,7 +52,7 @@ export interface WhatsAppProviderAdapter {
   getMediaUrl(mediaId: string): Promise<MediaUrlResult>
 
   /** Download media as a ReadableStream */
-  downloadMedia(mediaIdOrUrl: string): Promise<MediaDownloadResult>
+  downloadMedia(mediaIdOrUrl: string, options?: MediaDownloadOptions): Promise<MediaDownloadResult>
 
   /** Delete a previously uploaded media item */
   deleteMedia(mediaId: string): Promise<void>
