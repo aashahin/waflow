@@ -33,6 +33,9 @@ export interface WatiWebhookPayload {
   type?: string
   timestamp?: string
   messageId?: string
+  whatsappMessageId?: string
+  id?: string
+  data?: string
   /** Media fields */
   mediaUrl?: string
   mimeType?: string

@@ -12,6 +12,7 @@ export type WebhookEvent =
   | IncomingMessageEvent
   | MessageStatusEvent
   | MessageErrorEvent
+  | TemplateStatusEvent
 
 // ---------------------------------------------------------------------------
 // Incoming message from a user
@@ -29,6 +30,8 @@ export interface IncomingMessageEvent {
   message: IncomingMessage
   /** Sender contact info (when available) */
   contact?: { name: string; waId: string }
+  /** Quoted / replied-to message, when the provider includes it */
+  context?: { messageId: string; from?: string }
   /** Provider metadata */
   metadata: WebhookMetadata
 }
@@ -163,6 +166,16 @@ export interface MessageErrorEvent {
   code: number
   title: string
   message: string
+  metadata: WebhookMetadata
+}
+
+export interface TemplateStatusEvent {
+  type: 'template_status'
+  templateId?: string
+  templateName?: string
+  language?: string
+  status: string
+  reason?: string
   metadata: WebhookMetadata
 }
 

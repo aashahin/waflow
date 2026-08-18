@@ -76,6 +76,10 @@ export interface CloudApiRawMessage {
     message_id: string
     emoji: string
   }
+  button?: {
+    text: string
+    payload: string
+  }
   interactive?: {
     type: 'button_reply' | 'list_reply'
     button_reply?: { id: string; title: string }
@@ -119,7 +123,7 @@ export interface CloudApiRawError {
 /** Response from GET /{waba_id}/message_templates */
 export interface CloudApiTemplatesResponse {
   data: CloudApiRawTemplate[]
-  paging?: { cursors: { before: string; after: string }; next?: string }
+  paging?: { cursors?: { before?: string; after?: string }; next?: string }
 }
 
 /** Response from POST /{waba_id}/message_templates */
@@ -145,6 +149,10 @@ export interface CloudApiRawTemplate {
       phone_number?: string
       url?: string
       example?: string[]
+      otp_type?: string
+      autofill_text?: string
+      package_name?: string
+      signature_hash?: string
     }>
     example?: {
       header_text?: string[]

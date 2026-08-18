@@ -54,7 +54,7 @@ export function mapOutboundToWati(message: OutboundMessage): WatiMappedRequest {
         query: { whatsappNumber: phone },
         body: {
           template_name: message.template.name,
-          broadcast_name: `waflow_${Date.now()}`,
+          broadcast_name: `waflow_${message.template.name}`,
           parameters: flattenTemplateParameters(message.template.components),
         },
       }

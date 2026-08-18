@@ -2,6 +2,8 @@
 // Phone number normalization utilities
 // ---------------------------------------------------------------------------
 
+import { ValidationError } from '../core/errors.js'
+
 /**
  * Normalize a phone number to E.164-like format for WhatsApp API calls.
  *
@@ -17,13 +19,14 @@
 const STRIP_CHARS = /[\s\-()+]/g
 const E164_DIGITS = /^\d{7,15}$/
 
-export function normalizePhoneNumber(phone: string): string {
+export function normalizePhoneNumber(phone: string, provider = 'unknown'): string {
   const cleaned = phone.replace(STRIP_CHARS, '')
 
   if (!E164_DIGITS.test(cleaned)) {
-    throw new Error(
-      `Invalid phone number: "${phone}". Expected 7-15 digits in E.164 format (e.g. "+966501234567").`,
-    )
+    throw new ValidationError({
+      message: `Invalid phone number: "${phone}". Expected 7-15 digits in E.164 format (e.g. "+966501234567").`,
+      provider,
+    })
   }
 
   return cleaned

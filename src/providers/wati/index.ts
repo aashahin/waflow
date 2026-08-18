@@ -105,6 +105,7 @@ export class WatiProvider implements WhatsAppProviderAdapter {
       rateLimiter: new RateLimiter(options.rateLimit),
       retry: options.retry ?? {},
       hooks: options.hooks,
+      signal: options.signal,
     })
   }
 
@@ -127,9 +128,9 @@ export class WatiProvider implements WhatsAppProviderAdapter {
       query: mapped.query as Record<string, string | number | boolean | undefined>,
     })
 
-    if (!response.data.result) {
+    if (response.data?.result !== true) {
       throw new ProviderError({
-        message: response.data.info?.trim()
+        message: response.data?.info?.trim()
           ? `Wati rejected the send request: ${response.data.info}`
           : 'Wati rejected the send request',
         provider: this.name,
@@ -188,6 +189,7 @@ export class WatiProvider implements WhatsAppProviderAdapter {
     const response = await this.http.uploadRequest<{ id?: string; url?: string }>(
       '/api/v1/media',
       formData,
+      { timeout: params.timeout },
     )
 
     // Wati sends require a URL (the mapper throws on a media id), so surface the

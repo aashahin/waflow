@@ -36,6 +36,7 @@ describe('mapOutboundToWati', () => {
       expect(result.path).toBe('/api/v2/sendTemplateMessage')
       expect(result.query).toEqual({ whatsappNumber: TEST_DATA.phone.primaryNormalized })
       expect(result.body?.['template_name']).toBe('order_confirm')
+      expect(result.body?.['broadcast_name']).toBe('waflow_order_confirm')
       expect(result.body?.['parameters']).toEqual([
         { name: '1', value: 'ORD-1' },
       ])

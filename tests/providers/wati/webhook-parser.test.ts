@@ -75,6 +75,20 @@ describe('parseWatiWebhook', () => {
       }
     })
 
+    test('falls back to data when mediaUrl is absent', () => {
+      const events = parseWatiWebhook({
+        eventType: 'message',
+        waId: TEST_DATA.phone.primaryNormalized,
+        type: 'image',
+        data: 'https://cdn.wati.io/from-data.jpg',
+      })
+
+      expect(events[0]?.type).toBe('message')
+      if (events[0]?.type === 'message' && events[0].message.type === 'image') {
+        expect(events[0].message.mediaId).toBe('https://cdn.wati.io/from-data.jpg')
+      }
+    })
+
     test('parses document message', () => {
       const events = parseWatiWebhook({
         eventType: 'message',
@@ -193,17 +207,28 @@ describe('parseWatiWebhook', () => {
       }
     })
 
-    test('defaults to "sent" for unknown status', () => {
+    test('drops unknown status strings instead of reporting sent', () => {
       const events = parseWatiWebhook({
         eventType: 'status',
         statusString: 'unknown_status',
         localMessageId: 'local-000',
       })
 
-      expect(events).toHaveLength(1)
+      expect(events).toEqual([])
+    })
 
-      if (events[0]?.type === 'status') {
-        expect(events[0].status).toBe('sent')
+    test('reads whatsappMessageId when messageId is absent', () => {
+      const events = parseWatiWebhook({
+        eventType: 'message',
+        waId: TEST_DATA.phone.primaryNormalized,
+        type: 'text',
+        text: 'hi',
+        whatsappMessageId: 'wamid.wati',
+      })
+
+      expect(events[0]?.type).toBe('message')
+      if (events[0]?.type === 'message') {
+        expect(events[0].messageId).toBe('wamid.wati')
       }
     })
   })

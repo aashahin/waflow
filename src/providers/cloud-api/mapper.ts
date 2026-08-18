@@ -2,8 +2,8 @@
 // Cloud API mapper — unified types → Meta Graph API payloads
 // ---------------------------------------------------------------------------
 
-import type { OutboundMessage } from '../../types/messages.js'
-import type { MediaSource } from '../../types/common.js'
+import type { OutboundMessage, TemplateComponent, TemplateParameter } from '../../types/messages.js'
+import type { MediaSource, ProviderName } from '../../types/common.js'
 import { normalizePhoneNumber } from '../../utils/phone.js'
 import { assertNever } from '../../utils/assert.js'
 import { ValidationError } from '../../core/errors.js'
@@ -13,8 +13,11 @@ import { ValidationError } from '../../core/errors.js'
  * This is the canonical mapping — 360Dialog reuses it since their
  * payload format is identical.
  */
-export function mapOutboundToCloudApi(message: OutboundMessage): Record<string, unknown> {
-  const to = normalizePhoneNumber(message.to)
+export function mapOutboundToCloudApi(
+  message: OutboundMessage,
+  provider: ProviderName = 'cloud-api',
+): Record<string, unknown> {
+  const to = normalizePhoneNumber(message.to, provider)
 
   const base: Record<string, unknown> = {
     messaging_product: 'whatsapp',
@@ -46,7 +49,7 @@ export function mapOutboundToCloudApi(message: OutboundMessage): Record<string, 
           name: message.template.name,
           language: { code: message.template.language },
           ...(message.template.components
-            ? { components: message.template.components }
+            ? { components: mapTemplateComponents(message.template.components, provider) }
             : {}),
         },
       }
@@ -56,8 +59,8 @@ export function mapOutboundToCloudApi(message: OutboundMessage): Record<string, 
         ...base,
         type: 'image',
         image: {
-          ...mapMediaSource(message.image),
-          ...(message.image.caption ? { caption: message.image.caption } : {}),
+           ...mapMediaSource(message.image, provider),
+           ...(message.image.caption ? { caption: message.image.caption } : {}),
         },
       }
 
@@ -66,8 +69,8 @@ export function mapOutboundToCloudApi(message: OutboundMessage): Record<string, 
         ...base,
         type: 'video',
         video: {
-          ...mapMediaSource(message.video),
-          ...(message.video.caption ? { caption: message.video.caption } : {}),
+           ...mapMediaSource(message.video, provider),
+           ...(message.video.caption ? { caption: message.video.caption } : {}),
         },
       }
 
@@ -75,7 +78,7 @@ export function mapOutboundToCloudApi(message: OutboundMessage): Record<string, 
       return {
         ...base,
         type: 'audio',
-        audio: mapMediaSource(message.audio),
+         audio: mapMediaSource(message.audio, provider),
       }
 
     case 'document':
@@ -83,8 +86,8 @@ export function mapOutboundToCloudApi(message: OutboundMessage): Record<string, 
         ...base,
         type: 'document',
         document: {
-          ...mapMediaSource(message.document),
-          ...(message.document.caption ? { caption: message.document.caption } : {}),
+           ...mapMediaSource(message.document, provider),
+           ...(message.document.caption ? { caption: message.document.caption } : {}),
           ...(message.document.filename ? { filename: message.document.filename } : {}),
         },
       }
@@ -93,7 +96,7 @@ export function mapOutboundToCloudApi(message: OutboundMessage): Record<string, 
       return {
         ...base,
         type: 'sticker',
-        sticker: mapMediaSource(message.sticker),
+         sticker: mapMediaSource(message.sticker, provider),
       }
 
     case 'location':
@@ -129,7 +132,7 @@ export function mapOutboundToCloudApi(message: OutboundMessage): Record<string, 
       if (message.buttons.length > 3) {
         throw new ValidationError({
           message: `Interactive buttons: maximum 3 buttons allowed, got ${message.buttons.length}`,
-          provider: 'cloud-api',
+          provider,
         })
       }
       return {
@@ -137,7 +140,7 @@ export function mapOutboundToCloudApi(message: OutboundMessage): Record<string, 
         type: 'interactive',
         interactive: {
           type: 'button',
-          ...(message.header ? { header: mapInteractiveHeader(message.header) } : {}),
+           ...(message.header ? { header: mapInteractiveHeader(message.header, provider) } : {}),
           body: { text: message.body },
           ...(message.footer ? { footer: { text: message.footer } } : {}),
           action: {
@@ -153,7 +156,7 @@ export function mapOutboundToCloudApi(message: OutboundMessage): Record<string, 
       if (message.sections.length > 10) {
         throw new ValidationError({
           message: `Interactive list: maximum 10 sections allowed, got ${message.sections.length}`,
-          provider: 'cloud-api',
+          provider,
         })
       }
       // WhatsApp's real binding limit is ≤ 10 rows TOTAL across all sections.
@@ -161,7 +164,7 @@ export function mapOutboundToCloudApi(message: OutboundMessage): Record<string, 
       if (totalRows > 10) {
         throw new ValidationError({
           message: `Interactive list: maximum 10 rows total across all sections, got ${totalRows}`,
-          provider: 'cloud-api',
+          provider,
         })
       }
       return {
@@ -196,29 +199,73 @@ export function mapOutboundToCloudApi(message: OutboundMessage): Record<string, 
 // Helpers
 // ---------------------------------------------------------------------------
 
-function mapMediaSource(source: MediaSource): Record<string, string> {
+function mapMediaSource(source: MediaSource, provider: ProviderName): Record<string, string> {
   if ('url' in source && source.url) {
     return { link: source.url }
   }
   if ('id' in source && source.id) {
     return { id: source.id }
   }
-  throw new Error('MediaSource must have either url or id')
+  throw new ValidationError({
+    message: 'MediaSource must have either url or id',
+    provider,
+  })
 }
 
 function mapInteractiveHeader(
   header: NonNullable<Extract<OutboundMessage, { type: 'interactive.button' }>['header']>,
+  provider: ProviderName,
 ): Record<string, unknown> {
   switch (header.type) {
     case 'text':
       return { type: 'text', text: header.text }
     case 'image':
-      return { type: 'image', image: mapMediaSource(header.image) }
+      return { type: 'image', image: mapMediaSource(header.image, provider) }
     case 'video':
-      return { type: 'video', video: mapMediaSource(header.video) }
+      return { type: 'video', video: mapMediaSource(header.video, provider) }
     case 'document':
-      return { type: 'document', document: mapMediaSource(header.document) }
+      return { type: 'document', document: mapMediaSource(header.document, provider) }
     default:
       return assertNever(header)
+  }
+}
+
+function mapTemplateComponents(
+  components: TemplateComponent[],
+  provider: ProviderName,
+): Array<Record<string, unknown>> {
+  return components.map(component => ({
+    type: component.type,
+    ...(component.sub_type ? { sub_type: component.sub_type } : {}),
+    ...(component.index !== undefined ? { index: component.index } : {}),
+    parameters: component.parameters.map(parameter => mapTemplateParameter(parameter, provider)),
+  }))
+}
+
+function mapTemplateParameter(
+  parameter: TemplateParameter,
+  provider: ProviderName,
+): Record<string, unknown> {
+  switch (parameter.type) {
+    case 'text':
+      return {
+        type: 'text',
+        text: parameter.text,
+        ...(parameter.name ? { parameter_name: parameter.name } : {}),
+      }
+    case 'image':
+      return { type: 'image', image: mapMediaSource(parameter.image, provider) }
+    case 'video':
+      return { type: 'video', video: mapMediaSource(parameter.video, provider) }
+    case 'document':
+      return { type: 'document', document: mapMediaSource(parameter.document, provider) }
+    case 'currency':
+      return { type: 'currency', currency: parameter.currency }
+    case 'date_time':
+      return { type: 'date_time', date_time: parameter.date_time }
+    case 'payload':
+      return { type: 'payload', payload: parameter.payload }
+    default:
+      return assertNever(parameter)
   }
 }

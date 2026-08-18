@@ -114,6 +114,8 @@ export interface ClientOptions {
   rateLimit?: RateLimitConfig
   /** Request timeout in milliseconds (default: 30_000) */
   timeout?: number
+  /** Abort in-flight requests when this signal fires */
+  signal?: AbortSignal
   /** Lifecycle hooks */
   hooks?: ClientHooks
   /** Include raw provider response in SendResult (default: false) */

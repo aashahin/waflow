@@ -70,6 +70,8 @@ function extractClientOptions(config: CreateWhatsAppConfig): ClientOptions {
     timeout: config.timeout,
     hooks: config.hooks,
     includeRawResponse: config.includeRawResponse,
+    includeRawWebhook: config.includeRawWebhook,
+    signal: config.signal,
   }
 }
 

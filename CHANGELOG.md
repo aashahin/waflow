@@ -3,6 +3,58 @@
 All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/) (pre-1.0: breaking changes bump the minor).
 
+## 0.5.0
+
+Production audit: correctness, webhook resilience, and credential hygiene.
+
+### Breaking
+
+- **`destroy()` rejects queued rate-limiter waiters** with `TimeoutError` instead of
+  granting them (no post-shutdown request burst).
+- **`rateLimit.maxRequestsPerSecond` must be >= 1.** Values in `(0, 1)` previously
+  deadlocked (`tokens` could never reach 1).
+- **Invalid phones and empty media sources throw `ValidationError`** instead of a
+  generic `Error`.
+- **HTTP 400s are classified from Graph `error.code`.** `#190` is
+  `AuthenticationError`; `#130429` / `#131056` are `RateLimitError` (and therefore
+  retried); WhatsApp 13xxxx business errors are `ProviderError`.
+- **Unknown Wati status strings no longer become `'sent'`** — they are dropped.
+- **Wati `broadcast_name` is stable** (`waflow_${templateName}`) instead of a
+  unique `Date.now()` campaign per send.
+
+### Fixed
+
+- **`includeRawWebhook` is now passed through `createWhatsApp()`.**
+- **Cloud/360 webhook parse never throws** on malformed `entry` / `changes` / `value`.
+- **Template send maps `url` → `link` and `name` → `parameter_name`.**
+- **`downloadMedia(url)` strips provider credentials** unless the host is the API
+  origin or a known Meta/360dialog media CDN, and refuses private/link-local URLs.
+- **Inbound template quick-reply `type: "button"`** is parsed as `button_reply`.
+- **Inbound reply `context`** is exposed on message events.
+- **`message_template_status_update`** is parsed as `template_status`.
+- **`listTemplates` pagination** no longer crashes when `cursors` is missing and
+  stops if the cursor does not advance. OTP buttons are no longer mapped to
+  `QUICK_REPLY`.
+- **Empty/malformed send responses** no longer throw `TypeError`.
+- **360dialog validation errors** report `provider: '360dialog'`.
+- **Wati webhooks** fall back to `whatsappMessageId` / `id` / `data`.
+- **`Retry-After` HTTP-date** values are parsed.
+- **Lifecycle hooks that throw** no longer fail the request.
+
+### Added
+
+- `CreateTemplateInput.parameterFormat` (`positional` | `named`).
+- `template.delete(name, language?)` to delete a single language.
+- `ClientOptions.signal` and `MediaUpload.timeout`.
+- `OtpSendOptions` is exported from the public type barrel.
+- CJS `require` conditions on provider subpath exports.
+- `LICENSE` file.
+
+## 0.4.0
+
+Release tag existed without notes. See 0.3.0 for the last documented feature set
+and 0.5.0 for the audit follow-up.
+
 ## 0.3.0
 
 Correctness, reliability, and performance hardening for production OTP/messaging use.

@@ -7,15 +7,10 @@ import type { ProviderName } from '../types/common.js'
 import type { Logger } from './logger.js'
 import type { RateLimiter } from './rate-limiter.js'
 import type { RetryConfig } from '../types/config.js'
-import {
-  AuthenticationError,
-  NetworkError,
-  ProviderError,
-  RateLimitError,
-  TimeoutError,
-  ValidationError,
-} from './errors.js'
+import { NetworkError, ProviderError, TimeoutError } from './errors.js'
+import { throwForHttpError } from './http-error.js'
 import { resolveRetryConfig, withRetry } from './retry.js'
+import { assertSafeFetchUrl, isAbsoluteUrl, isTrustedMediaHost, makeRequestSignal } from './url-guard.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -38,6 +33,8 @@ export interface HttpClientConfig {
   retry: RetryConfig
   /** Lifecycle hooks */
   hooks?: ClientHooks
+  /** Optional caller abort signal merged with the per-request timeout */
+  signal?: AbortSignal
 }
 
 export interface RequestOptions {
@@ -61,6 +58,8 @@ export interface RequestOptions {
    * POST/PATCH are not. Set explicitly when the default is wrong.
    */
   idempotent?: boolean
+  /** Per-request abort signal (merged with the timeout signal) */
+  signal?: AbortSignal
 }
 
 export interface HttpResponse<T = unknown> {
@@ -104,28 +103,21 @@ export class HttpClient {
 
       const startTime = Date.now()
 
-      this.config.hooks?.onRequest?.({
-        url,
-        method: opts.method,
-        body: opts.body,
-      })
+      this.safeHook('onRequest', { url, method: opts.method, body: opts.body })
 
       this.config.logger.debug(`${opts.method} ${url}`)
 
       const response = await this.doFetch(url, {
         method: opts.method,
-        headers,
+        headers: this.headersForUrl(url, headers),
         body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
         timeout,
+        signal: opts.signal,
       })
 
       const durationMs = Date.now() - startTime
 
-      this.config.hooks?.onResponse?.({
-        url,
-        status: response.status,
-        durationMs,
-      })
+      this.safeHook('onResponse', { url, status: response.status, durationMs })
 
       if (!response.ok) {
         await this.handleErrorResponse(response, opts)
@@ -162,16 +154,17 @@ export class HttpClient {
       }
 
       const startTime = Date.now()
-      this.config.hooks?.onRequest?.({ url, method: opts.method, body: opts.body })
+      this.safeHook('onRequest', { url, method: opts.method, body: opts.body })
 
       const response = await this.doFetch(url, {
         method: opts.method,
-        headers,
+        headers: this.headersForUrl(url, headers),
         body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
         timeout,
+        signal: opts.signal,
       })
 
-      this.config.hooks?.onResponse?.({
+      this.safeHook('onResponse', {
         url,
         status: response.status,
         durationMs: Date.now() - startTime,
@@ -197,26 +190,35 @@ export class HttpClient {
   async uploadRequest<T = unknown>(
     path: string,
     formData: FormData,
-    extraHeaders?: Record<string, string>,
-    skipRetry?: boolean,
+    options?: {
+      extraHeaders?: Record<string, string>
+      skipRetry?: boolean
+      timeout?: number
+      signal?: AbortSignal
+    },
   ): Promise<HttpResponse<T>> {
     const execute = async (): Promise<HttpResponse<T>> => {
       await this.config.rateLimiter.acquire()
 
       const url = this.buildUrl(path)
-      const timeout = this.config.timeout
+      const timeout = options?.timeout ?? this.config.timeout
       const headers: Record<string, string> = {
         ...this.config.defaultHeaders,
-        ...extraHeaders,
+        ...options?.extraHeaders,
       }
-      // Do NOT set Content-Type — fetch sets it with boundary for FormData
 
       const startTime = Date.now()
-      this.config.hooks?.onRequest?.({ url, method: 'POST' })
+      this.safeHook('onRequest', { url, method: 'POST' })
 
-      const response = await this.doFetch(url, { method: 'POST', headers, body: formData, timeout })
+      const response = await this.doFetch(url, {
+        method: 'POST',
+        headers: this.headersForUrl(url, headers),
+        body: formData,
+        timeout,
+        signal: options?.signal,
+      })
 
-      this.config.hooks?.onResponse?.({
+      this.safeHook('onResponse', {
         url,
         status: response.status,
         durationMs: Date.now() - startTime,
@@ -231,7 +233,7 @@ export class HttpClient {
       return { status: response.status, data, headers: response.headers }
     }
 
-    return this.run(execute, 'POST', skipRetry, false)
+    return this.run(execute, 'POST', options?.skipRetry, false)
   }
 
   /**
@@ -260,22 +262,79 @@ export class HttpClient {
     } catch (error) {
       // Fire once, after retries are exhausted, with the actual thrown error
       // (covers network/timeout errors, not just HTTP error responses).
-      this.config.hooks?.onError?.(error)
+      this.safeErrorHook(error)
       throw error
     }
+  }
+
+  private safeHook(
+    name: 'onRequest' | 'onResponse',
+    payload: { url: string; method?: string; body?: unknown; status?: number; durationMs?: number },
+  ): void {
+    try {
+      if (name === 'onRequest') {
+        this.config.hooks?.onRequest?.({
+          url: payload.url,
+          method: payload.method ?? 'GET',
+          body: payload.body,
+        })
+        return
+      }
+      this.config.hooks?.onResponse?.({
+        url: payload.url,
+        status: payload.status ?? 0,
+        durationMs: payload.durationMs ?? 0,
+      })
+    } catch (error) {
+      this.config.logger.warn(`hooks.${name} threw`, {
+        errorMessage: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  private safeErrorHook(error: unknown): void {
+    try {
+      this.config.hooks?.onError?.(error)
+    } catch (hookError) {
+      this.config.logger.warn('hooks.onError threw', {
+        errorMessage: hookError instanceof Error ? hookError.message : String(hookError),
+      })
+    }
+  }
+
+  private headersForUrl(url: string, headers: Record<string, string>): Record<string, string> {
+    if (!isAbsoluteUrl(url) || isTrustedMediaHost(url, this.config.baseUrl)) {
+      return headers
+    }
+    const stripped = { ...headers }
+    delete stripped['Authorization']
+    delete stripped['authorization']
+    delete stripped['D360-API-KEY']
+    delete stripped['d360-api-key']
+    return stripped
   }
 
   /** Perform a single fetch, translating low-level failures to typed errors. */
   private async doFetch(
     url: string,
-    init: { method: string; headers: Record<string, string>; body?: BodyInit; timeout: number },
+    init: {
+      method: string
+      headers: Record<string, string>
+      body?: BodyInit
+      timeout: number
+      signal?: AbortSignal
+    },
   ): Promise<Response> {
+    if (isAbsoluteUrl(url)) {
+      assertSafeFetchUrl(url, this.config.provider)
+    }
+
     try {
       return await fetch(url, {
         method: init.method,
         headers: init.headers,
         body: init.body,
-        signal: AbortSignal.timeout(init.timeout),
+        signal: makeRequestSignal(init.timeout, init.signal ?? this.config.signal),
       })
     } catch (error) {
       if (error instanceof DOMException && error.name === 'TimeoutError') {
@@ -324,7 +383,7 @@ export class HttpClient {
 
   private buildUrl(path: string, query?: Record<string, string | number | boolean | undefined>): string {
     // If path is already a full URL (e.g., media download URLs), use as-is
-    if (path.startsWith('http://') || path.startsWith('https://')) {
+    if (isAbsoluteUrl(path)) {
       return path
     }
 
@@ -359,44 +418,14 @@ export class HttpClient {
       errorBody = null
     }
 
-    const context = {
+    throwForHttpError({
+      status: response.status,
+      method: opts.method,
+      path: opts.path,
       provider: this.config.provider,
-      statusCode: response.status,
       raw: errorBody,
-    } as const
-
-    // Classify by HTTP status
-    switch (response.status) {
-      case 401:
-        throw new AuthenticationError({
-          message: `Authentication failed: ${opts.method} ${opts.path}`,
-          ...context,
-        })
-      case 403:
-        throw new AuthenticationError({
-          message: `Access forbidden: ${opts.method} ${opts.path}`,
-          ...context,
-        })
-      case 429: {
-        const retryAfter = response.headers.get('Retry-After')
-        const parsed = retryAfter ? parseInt(retryAfter, 10) : NaN
-        throw new RateLimitError({
-          message: `Rate limited: ${opts.method} ${opts.path}`,
-          ...context,
-          retryAfter: Number.isNaN(parsed) ? undefined : parsed,
-        })
-      }
-      case 400:
-        throw new ValidationError({
-          message: `Validation failed: ${opts.method} ${opts.path}`,
-          ...context,
-        })
-      default:
-        throw new ProviderError({
-          message: `Provider error (${response.status}): ${opts.method} ${opts.path}`,
-          ...context,
-        })
-    }
+      retryAfterHeader: response.headers.get('Retry-After'),
+    })
   }
 }
 
