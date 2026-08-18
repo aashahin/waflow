@@ -361,5 +361,87 @@ describe('CloudApiProvider', () => {
         globalThis.fetch = originalFetch
       }
     })
+
+    test('createTemplate honors parameterFormat named', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) =>
+        Promise.resolve(
+          new Response(JSON.stringify({ id: 'tmpl-named', status: 'PENDING', category: 'UTILITY' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        ),
+      )
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider({ wabaId: 'waba-789' })
+        await provider.createTemplate({
+          name: 'named_hello',
+          language: 'en_US',
+          category: 'UTILITY',
+          parameterFormat: 'named',
+          components: [{ type: 'BODY', text: 'Hi {{first_name}}' }],
+        })
+
+        const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body ?? '{}')) as Record<string, unknown>
+        expect(body.parameter_format).toBe('named')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+  })
+
+  describe('media download', () => {
+    test('keeps the access token for Meta media CDNs', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) =>
+        Promise.resolve(
+          new Response('ok', {
+            status: 200,
+            headers: { 'content-type': 'image/jpeg' },
+          }),
+        ),
+      )
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        await provider.downloadMedia('https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1')
+
+        const headers = (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.headers as Record<string, string>
+        expect(headers['Authorization']).toBe('Bearer EAAx-test-token')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('does not send the access token to untrusted hosts', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) =>
+        Promise.resolve(
+          new Response('ok', {
+            status: 200,
+            headers: { 'content-type': 'image/jpeg' },
+          }),
+        ),
+      )
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        await provider.downloadMedia('https://cdn.example.com/photo.jpg')
+
+        const headers = (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.headers as Record<string, string>
+        expect(headers['Authorization']).toBeUndefined()
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('refuses private download URLs', async () => {
+      const provider = createProvider()
+      await expect(provider.downloadMedia('http://127.0.0.1/latest')).rejects.toThrow()
+    })
   })
 })

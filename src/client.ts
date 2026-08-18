@@ -66,8 +66,8 @@ export class WhatsAppClient {
   }
 
   /**
-   * Release resources held by the client (the rate limiter's pending timer and
-   * any queued waiters). Call when you're done with a client you won't reuse —
+    * Release resources held by the client (the rate limiter's pending timer;
+    * queued waiters are rejected). Call when you're done with a client you won't reuse —
    * e.g. a per-request client on an edge runtime. Safe to call more than once.
    *
    * ```ts
@@ -417,13 +417,13 @@ class TemplateNamespace {
   }
 
   /** Delete a message template by name */
-  async delete(name: string): Promise<void> {
+  async delete(name: string, language?: string): Promise<void> {
     if (!this.adapter.deleteTemplate) {
       throw new UnsupportedFeatureError({
         message: 'Template deletion is not supported by this provider',
         provider: this.adapter.name,
       })
     }
-    return this.adapter.deleteTemplate(name)
+    return this.adapter.deleteTemplate(name, language)
   }
 }

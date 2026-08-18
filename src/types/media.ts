@@ -10,6 +10,8 @@ export interface MediaUpload {
   mimeType: string
   /** Optional filename */
   filename?: string
+  /** Override the client timeout for this upload */
+  timeout?: number
 }
 
 /** Result from a successful media upload */

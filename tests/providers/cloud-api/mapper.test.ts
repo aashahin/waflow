@@ -70,6 +70,42 @@ describe('mapOutboundToCloudApi', () => {
       })
     })
 
+    test('maps named parameters and media urls to Cloud API fields', () => {
+      const result = mapOutboundToCloudApi({
+        type: 'template',
+        to: TEST_DATA.phone.primary,
+        template: {
+          name: 'receipt',
+          language: 'en_US',
+          components: [
+            {
+              type: 'header',
+              parameters: [{ type: 'image', image: { url: 'https://cdn.example/a.jpg' } }],
+            },
+            {
+              type: 'body',
+              parameters: [{ type: 'text', text: 'Ahmed', name: 'first_name' }],
+            },
+          ],
+        },
+      })
+
+      expect(result['template']).toEqual({
+        name: 'receipt',
+        language: { code: 'en_US' },
+        components: [
+          {
+            type: 'header',
+            parameters: [{ type: 'image', image: { link: 'https://cdn.example/a.jpg' } }],
+          },
+          {
+            type: 'body',
+            parameters: [{ type: 'text', text: 'Ahmed', parameter_name: 'first_name' }],
+          },
+        ],
+      })
+    })
+
     test('maps template without components', () => {
       const result = mapOutboundToCloudApi({
         type: 'template',
@@ -232,19 +268,26 @@ describe('mapOutboundToCloudApi', () => {
     })
 
     test('throws ValidationError when buttons exceed 3', () => {
-      expect(() =>
-        mapOutboundToCloudApi({
-          type: 'interactive.button',
-          to: TEST_DATA.phone.primary,
-          body: 'Choose:',
-          buttons: [
-            { id: '1', title: 'A' },
-            { id: '2', title: 'B' },
-            { id: '3', title: 'C' },
-            { id: '4', title: 'D' },
-          ],
-        }),
-      ).toThrow(ValidationError)
+      try {
+        mapOutboundToCloudApi(
+          {
+            type: 'interactive.button',
+            to: TEST_DATA.phone.primary,
+            body: 'Choose:',
+            buttons: [
+              { id: '1', title: 'A' },
+              { id: '2', title: 'B' },
+              { id: '3', title: 'C' },
+              { id: '4', title: 'D' },
+            ],
+          },
+          '360dialog',
+        )
+        throw new Error('expected throw')
+      } catch (error) {
+        expect(error).toBeInstanceOf(ValidationError)
+        expect((error as ValidationError).provider).toBe('360dialog')
+      }
     })
 
     test('allows exactly 3 buttons', () => {

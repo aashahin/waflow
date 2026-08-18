@@ -14,7 +14,7 @@ import type {
   CloudApiRawMessage,
   CloudApiRawStatus,
 } from './types.js'
-import { isRecord, hasProp } from '../../utils/assert.js'
+import { isRecord } from '../../utils/assert.js'
 
 /**
  * Parse a raw Cloud API webhook payload into normalized WebhookEvent[].
@@ -33,55 +33,76 @@ export function parseCloudApiWebhook(
   if (!isValidWebhookPayload(body)) return []
 
   const events: WebhookEvent[] = []
+  const raw = options.includeRaw ? body : undefined
 
   for (const entry of body.entry) {
+    if (!isRecord(entry) || !Array.isArray(entry.changes)) continue
+
     for (const change of entry.changes) {
-      if (change.field !== 'messages') continue
+      if (!isRecord(change) || !isRecord(change.value)) continue
 
+      const field = typeof change.field === 'string' ? change.field : ''
       const value = change.value
-      const metadata = buildMetadata(value, options.includeRaw ? body : undefined, providerName)
 
-      // Parse incoming messages
-      if (value.messages) {
-        // Index contacts once per change instead of scanning per message.
-        // Keep the FIRST entry per wa_id to match the previous `find()` semantics.
-        const contacts = value.contacts ?? []
-        const contactsByWaId = new Map<string, (typeof contacts)[number]>()
-        for (const c of contacts) {
-          if (!contactsByWaId.has(c.wa_id)) contactsByWaId.set(c.wa_id, c)
+      if (field === 'message_template_status_update') {
+        const templateEvent = parseTemplateStatusEvent(value as Record<string, unknown>, raw, providerName)
+        if (templateEvent) events.push(templateEvent)
+        continue
+      }
+
+      if (field !== 'messages') continue
+
+      const metadata = buildMetadata(value, raw, providerName)
+
+      if (Array.isArray(value.messages)) {
+        const contactsByWaId = new Map<string, { name: string; waId: string }>()
+        if (Array.isArray(value.contacts)) {
+          for (const c of value.contacts) {
+            if (!isRecord(c) || typeof c.wa_id !== 'string' || contactsByWaId.has(c.wa_id)) continue
+            const name = isRecord(c.profile) && typeof c.profile.name === 'string' ? c.profile.name : undefined
+            if (name) contactsByWaId.set(c.wa_id, { name, waId: c.wa_id })
+          }
         }
-        const fallbackContact = contacts[0]
+
         for (const msg of value.messages) {
-          const contact = contactsByWaId.get(msg.from) ?? fallbackContact
+          if (!isRecord(msg) || typeof msg.id !== 'string' || typeof msg.from !== 'string') continue
+          const typed = msg as unknown as CloudApiRawMessage
           events.push({
             type: 'message',
-            messageId: msg.id,
-            from: msg.from,
-            timestamp: new Date(parseInt(msg.timestamp, 10) * 1000),
-            message: parseIncomingMessage(msg),
-            contact: contact
-              ? { name: contact.profile.name, waId: contact.wa_id }
-              : undefined,
+            messageId: typed.id,
+            from: typed.from,
+            timestamp: parseUnixTimestamp(typed.timestamp),
+            message: parseIncomingMessage(typed),
+            contact: contactsByWaId.get(typed.from),
+            context: parseMessageContext(typed),
             metadata,
           })
         }
       }
 
-      // Parse status updates
-      if (value.statuses) {
+      if (Array.isArray(value.statuses)) {
         for (const status of value.statuses) {
-          events.push(parseStatusEvent(status, metadata))
+          if (!isRecord(status) || typeof status.id !== 'string') continue
+          if (
+            status.status !== 'sent'
+            && status.status !== 'delivered'
+            && status.status !== 'read'
+            && status.status !== 'failed'
+          ) {
+            continue
+          }
+          events.push(parseStatusEvent(status as unknown as CloudApiRawStatus, metadata))
         }
       }
 
-      // Parse errors
-      if (value.errors) {
+      if (Array.isArray(value.errors)) {
         for (const error of value.errors) {
+          if (!isRecord(error)) continue
           events.push({
             type: 'error',
-            code: error.code,
-            title: error.title,
-            message: error.message,
+            code: typeof error.code === 'number' ? error.code : 0,
+            title: typeof error.title === 'string' ? error.title : 'Error',
+            message: typeof error.message === 'string' ? error.message : '',
             metadata,
           })
         }
@@ -91,10 +112,6 @@ export function parseCloudApiWebhook(
 
   return events
 }
-
-// ---------------------------------------------------------------------------
-// Message type parsing
-// ---------------------------------------------------------------------------
 
 function parseIncomingMessage(msg: CloudApiRawMessage): IncomingMessage {
   switch (msg.type) {
@@ -162,6 +179,13 @@ function parseIncomingMessage(msg: CloudApiRawMessage): IncomingMessage {
         reactedMessageId: msg.reaction?.message_id ?? '',
       }
 
+    case 'button':
+      return {
+        type: 'button_reply',
+        buttonId: msg.button?.payload ?? '',
+        title: msg.button?.text ?? '',
+      }
+
     case 'interactive':
       if (msg.interactive?.type === 'button_reply' && msg.interactive.button_reply) {
         return {
@@ -191,10 +215,6 @@ function parseIncomingMessage(msg: CloudApiRawMessage): IncomingMessage {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Status event parsing
-// ---------------------------------------------------------------------------
-
 function parseStatusEvent(
   status: CloudApiRawStatus,
   metadata: WebhookMetadata,
@@ -204,33 +224,66 @@ function parseStatusEvent(
     messageId: status.id,
     status: status.status,
     recipientId: status.recipient_id,
-    timestamp: new Date(parseInt(status.timestamp, 10) * 1000),
+    timestamp: parseUnixTimestamp(status.timestamp),
     errors: status.errors,
     metadata,
   }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+function parseTemplateStatusEvent(
+  value: Record<string, unknown>,
+  raw: unknown,
+  provider: ProviderName,
+): WebhookEvent | undefined {
+  const status = typeof value.event === 'string' ? value.event : undefined
+  const templateName = typeof value.message_template_name === 'string' ? value.message_template_name : undefined
+  const templateId = value.message_template_id !== undefined ? String(value.message_template_id) : undefined
+  if (!status && !templateName && !templateId) return undefined
+  return {
+    type: 'template_status',
+    templateId,
+    templateName,
+    language: typeof value.message_template_language === 'string' ? value.message_template_language : undefined,
+    status: status ?? 'UNKNOWN',
+    reason: typeof value.reason === 'string' ? value.reason : undefined,
+    metadata: {
+      provider,
+      ...(raw !== undefined ? { raw } : {}),
+    },
+  }
+}
+
+function parseMessageContext(
+  msg: CloudApiRawMessage,
+): { messageId: string; from?: string } | undefined {
+  if (!msg.context?.id) return undefined
+  return {
+    messageId: msg.context.id,
+    from: msg.context.from,
+  }
+}
+
+function parseUnixTimestamp(raw: unknown): Date {
+  if (typeof raw !== 'string' && typeof raw !== 'number') return new Date(0)
+  const seconds = typeof raw === 'number' ? raw : parseInt(raw, 10)
+  if (!Number.isFinite(seconds)) return new Date(0)
+  return new Date(seconds * 1000)
+}
 
 function buildMetadata(
-  value: CloudApiWebhookValue,
+  value: CloudApiWebhookValue | Record<string, unknown>,
   raw: unknown,
   provider: ProviderName,
 ): WebhookMetadata {
+  const metadata = isRecord(value.metadata) ? value.metadata : undefined
   return {
     provider,
-    phoneNumberId: value.metadata.phone_number_id,
-    displayPhoneNumber: value.metadata.display_phone_number,
+    phoneNumberId: typeof metadata?.phone_number_id === 'string' ? metadata.phone_number_id : undefined,
+    displayPhoneNumber: typeof metadata?.display_phone_number === 'string' ? metadata.display_phone_number : undefined,
     ...(raw !== undefined ? { raw } : {}),
   }
 }
 
 function isValidWebhookPayload(body: unknown): body is CloudApiWebhookPayload {
-  return (
-    isRecord(body) &&
-    hasProp(body, 'entry') &&
-    Array.isArray(body['entry'])
-  )
+  return isRecord(body) && Array.isArray(body.entry)
 }

@@ -55,4 +55,6 @@ export interface CreateTemplateInput {
   language: string
   category: 'UTILITY' | 'MARKETING' | 'AUTHENTICATION'
   components: TemplateComponentDef[]
+  /** Default `positional`. Use `named` for {{name}} placeholders. */
+  parameterFormat?: 'positional' | 'named'
 }

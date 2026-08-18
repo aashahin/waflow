@@ -83,8 +83,8 @@ export interface WhatsAppProviderAdapter {
   /** Create a new message template */
   createTemplate?(input: CreateTemplateInput): Promise<Template>
 
-  /** Delete a message template by name */
-  deleteTemplate?(name: string): Promise<void>
+  /** Delete a message template by name (optionally a single language) */
+  deleteTemplate?(name: string, language?: string): Promise<void>
 
   // -- Capabilities -------------------------------------------------------
 

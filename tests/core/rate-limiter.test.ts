@@ -52,6 +52,7 @@ describe('RateLimiter', () => {
   test('rejects invalid maxRequestsPerSecond', () => {
     expect(() => new RateLimiter({ maxRequestsPerSecond: 0 })).toThrow(RangeError)
     expect(() => new RateLimiter({ maxRequestsPerSecond: -5 })).toThrow(RangeError)
+    expect(() => new RateLimiter({ maxRequestsPerSecond: 0.5 })).toThrow(RangeError)
   })
 
   test('rejects invalid maxQueueSize', () => {
@@ -67,8 +68,16 @@ describe('RateLimiter', () => {
 
     await expect(limiter.acquire()).rejects.toBeInstanceOf(RateLimitError)
 
-    limiter.destroy() // release the queued waiter so the test doesn't hang
-    await queued
+    limiter.destroy()
+    await expect(queued).rejects.toBeInstanceOf(TimeoutError)
+  })
+
+  test('destroy() rejects queued waiters instead of granting them', async () => {
+    const limiter = new RateLimiter({ maxRequestsPerSecond: 1 })
+    await limiter.acquire()
+    const queued = limiter.acquire()
+    limiter.destroy()
+    await expect(queued).rejects.toBeInstanceOf(TimeoutError)
   })
 
   test('rejects with TimeoutError when a waiter exceeds queueTimeoutMs', async () => {

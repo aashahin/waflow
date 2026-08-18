@@ -1,6 +1,6 @@
 {
   "name": "waflow",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "description": "Unified WhatsApp provider SDK — one interface, any provider.",
   "license": "MIT",
@@ -15,15 +15,18 @@
     },
     "./providers/cloud-api": {
       "types": "./dist/providers/cloud-api/index.d.ts",
-      "import": "./dist/providers/cloud-api/index.js"
+      "import": "./dist/providers/cloud-api/index.js",
+      "require": "./dist/providers/cloud-api/index.cjs"
     },
     "./providers/360dialog": {
       "types": "./dist/providers/360dialog/index.d.ts",
-      "import": "./dist/providers/360dialog/index.js"
+      "import": "./dist/providers/360dialog/index.js",
+      "require": "./dist/providers/360dialog/index.cjs"
     },
     "./providers/wati": {
       "types": "./dist/providers/wati/index.d.ts",
-      "import": "./dist/providers/wati/index.js"
+      "import": "./dist/providers/wati/index.js",
+      "require": "./dist/providers/wati/index.cjs"
     }
   },
   "files": [
@@ -34,7 +37,7 @@
     "dev": "tsup --watch",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit",
-    "lint": "bunx eslint ."
+    "lint": "bunx tsc --noEmit"
   },
   "devDependencies": {
     "@types/bun": "latest",

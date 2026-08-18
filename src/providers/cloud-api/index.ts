@@ -64,13 +64,14 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
       rateLimiter: new RateLimiter(options.rateLimit),
       retry: options.retry ?? {},
       hooks: options.hooks,
+      signal: options.signal,
     })
   }
 
   // -- Messaging ----------------------------------------------------------
 
   async sendMessage(message: OutboundMessage): Promise<SendResult> {
-    const payload = mapOutboundToCloudApi(message)
+    const payload = mapOutboundToCloudApi(message, this.name)
 
     const response = await this.http.request<CloudApiSendResponse>({
       method: 'POST',
@@ -78,7 +79,7 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
       body: payload,
     })
 
-    const messageId = response.data.messages[0]?.id ?? ''
+    const messageId = response.data?.messages?.[0]?.id ?? ''
 
     if (!messageId) {
       throw new ProviderError({
@@ -135,6 +136,7 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
     const response = await this.http.uploadRequest<CloudApiMediaUploadResponse>(
       `/${this.config.phoneNumberId}/media`,
       formData,
+      { timeout: params.timeout },
     )
 
     return { id: response.data.id }
@@ -250,7 +252,6 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
     const templates: Template[] = []
     let after: string | undefined
 
-    // Paginate through all pages — Meta returns max ~25 templates per page
     do {
       const query: Record<string, string> = {}
       if (after) query['after'] = after
@@ -261,10 +262,12 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
         query,
       })
 
-      templates.push(...response.data.data.map(mapRawTemplate))
+      const page = Array.isArray(response.data?.data) ? response.data.data : []
+      templates.push(...page.map(mapRawTemplate))
 
-      // Continue only if there's a next page
-      after = response.data.paging?.next ? response.data.paging.cursors.after : undefined
+      const nextCursor = response.data?.paging?.next ? response.data.paging.cursors?.after : undefined
+      if (!nextCursor || nextCursor === after) break
+      after = nextCursor
     } while (after)
 
     return templates
@@ -287,7 +290,7 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
         name: input.name,
         language: input.language,
         category: input.category,
-        parameter_format: 'positional',
+        parameter_format: input.parameterFormat ?? 'positional',
         components: input.components,
       },
     })
@@ -302,13 +305,13 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
     }
   }
 
-  async deleteTemplate(name: string): Promise<void> {
+  async deleteTemplate(name: string, language?: string): Promise<void> {
     const wabaId = this.getWabaId()
 
     await this.http.request({
       method: 'DELETE',
       path: `/${wabaId}/message_templates`,
-      query: { name },
+      query: { name, ...(language ? { language } : {}) },
     })
   }
 
@@ -366,7 +369,8 @@ export function getResponseBodyStream(response: Response, providerName: Provider
 const TEMPLATE_STATUSES: readonly Template['status'][] = ['APPROVED', 'PENDING', 'REJECTED', 'DISABLED', 'PAUSED']
 const TEMPLATE_CATEGORIES: readonly Template['category'][] = ['UTILITY', 'MARKETING', 'AUTHENTICATION']
 const COMPONENT_TYPES: readonly ('HEADER' | 'BODY' | 'FOOTER' | 'BUTTONS')[] = ['HEADER', 'BODY', 'FOOTER', 'BUTTONS']
-const BUTTON_TYPES: readonly ('PHONE_NUMBER' | 'URL' | 'QUICK_REPLY')[] = ['PHONE_NUMBER', 'URL', 'QUICK_REPLY']
+const BUTTON_TYPES: readonly ('PHONE_NUMBER' | 'URL' | 'QUICK_REPLY' | 'OTP')[] = ['PHONE_NUMBER', 'URL', 'QUICK_REPLY', 'OTP']
+const OTP_TYPES: readonly ('COPY_CODE' | 'ONE_TAP' | 'ZERO_TAP')[] = ['COPY_CODE', 'ONE_TAP', 'ZERO_TAP']
 const FORMAT_TYPES: readonly ('TEXT' | 'IMAGE' | 'VIDEO' | 'DOCUMENT')[] = ['TEXT', 'IMAGE', 'VIDEO', 'DOCUMENT']
 
 /** Coerce a raw string to a known enum value, falling back to a default */
@@ -392,6 +396,12 @@ function mapRawTemplate(t: CloudApiRawTemplate): Template {
         phone_number: b.phone_number,
         url: b.url,
         example: b.example,
+        otp_type: b.otp_type && (OTP_TYPES as readonly string[]).includes(b.otp_type)
+          ? (b.otp_type as (typeof OTP_TYPES)[number])
+          : undefined,
+        autofill_text: b.autofill_text,
+        package_name: b.package_name,
+        signature_hash: b.signature_hash,
       })),
       example: c.example,
     })),

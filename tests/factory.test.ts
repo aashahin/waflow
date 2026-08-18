@@ -72,9 +72,51 @@ describe('createWhatsApp', () => {
       retry: { maxRetries: 1, baseDelay: 100, maxDelay: 1000 },
       rateLimit: { maxRequestsPerSecond: 10 },
       includeRawResponse: true,
+      includeRawWebhook: true,
     })
 
     expect(wa).toBeInstanceOf(WhatsAppClient)
+  })
+
+  test('passes includeRawWebhook through to parsed events', () => {
+    const wa = createWhatsApp({
+      provider: 'cloud-api',
+      phoneNumberId: TEST_DATA.config.cloudApi.phoneNumberId,
+      accessToken: TEST_DATA.config.cloudApi.accessToken,
+      includeRawWebhook: true,
+    })
+
+    const payload = {
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          id: '1',
+          changes: [
+            {
+              field: 'messages',
+              value: {
+                messaging_product: 'whatsapp',
+                metadata: {
+                  display_phone_number: '1',
+                  phone_number_id: TEST_DATA.config.cloudApi.phoneNumberId,
+                },
+                messages: [
+                  {
+                    id: TEST_DATA.messageId.abc123,
+                    from: TEST_DATA.phone.primaryNormalized,
+                    timestamp: '1',
+                    type: 'text',
+                    text: { body: 'hi' },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    }
+
+    expect(wa.webhook.parse(payload)[0]?.metadata.raw).toEqual(payload)
   })
 })
 

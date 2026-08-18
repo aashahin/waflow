@@ -12,6 +12,7 @@ const DEFAULT_QUEUE_TIMEOUT_MS = 30_000 // a request never waits forever for a t
 /** A parked caller waiting for a token. */
 interface Waiter {
   grant: () => void
+  fail: (error: unknown) => void
   settled: boolean
 }
 
@@ -41,8 +42,8 @@ export class RateLimiter {
 
   constructor(config?: RateLimitConfig) {
     const maxRps = config?.maxRequestsPerSecond ?? DEFAULT_MAX_RPS
-    if (!Number.isFinite(maxRps) || maxRps <= 0) {
-      throw new RangeError(`rateLimit.maxRequestsPerSecond must be a positive number, got ${maxRps}`)
+    if (!Number.isFinite(maxRps) || maxRps < 1) {
+      throw new RangeError(`rateLimit.maxRequestsPerSecond must be >= 1, got ${maxRps}`)
     }
 
     const maxQueue = config?.maxQueueSize ?? DEFAULT_MAX_QUEUE
@@ -110,7 +111,7 @@ export class RateLimiter {
     }
 
     return new Promise<void>((resolve, reject) => {
-      const waiter: Waiter = { settled: false, grant: () => {} }
+      const waiter: Waiter = { settled: false, grant: () => {}, fail: () => {} }
 
       const timer = setTimeout(() => {
         if (waiter.settled) return
@@ -129,6 +130,13 @@ export class RateLimiter {
         waiter.settled = true
         clearTimeout(timer)
         resolve()
+      }
+
+      waiter.fail = (error: unknown) => {
+        if (waiter.settled) return
+        waiter.settled = true
+        clearTimeout(timer)
+        reject(error)
       }
 
       this.waitQueue.push(waiter)
@@ -160,7 +168,7 @@ export class RateLimiter {
   }
 
   /**
-   * Clean up pending timers and resolve queued waiters.
+   * Clean up pending timers and reject queued waiters.
    * Call this when you're done with the client to allow clean shutdown
    * in serverless/edge environments.
    */
@@ -170,10 +178,12 @@ export class RateLimiter {
       this.drainTimerId = null
     }
     this.drainScheduled = false
-    // Resolve all pending waiters (grant() clears each one's timeout) so
-    // nothing hangs after shutdown.
     while (this.waitQueue.length > 0) {
-      this.waitQueue.shift()?.grant()
+      this.waitQueue.shift()?.fail(
+        new TimeoutError({
+          message: 'Rate limiter destroyed',
+        }),
+      )
     }
   }
 }

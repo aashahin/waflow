@@ -63,7 +63,7 @@ function parseIncomingMessage(
   return [
     {
       type: 'message',
-      messageId: payload.messageId ?? '',
+      messageId: firstString(payload.messageId, payload.whatsappMessageId, payload.id),
       from: payload.waId,
       timestamp: parseWatiTimestamp(payload.timestamp),
       message,
@@ -85,7 +85,7 @@ function parseMessageContent(payload: WatiWebhookPayload): IncomingMessage {
     case 'image':
       return {
         type: 'image',
-        mediaId: payload.mediaUrl ?? '',
+        mediaId: firstString(payload.mediaUrl, payload.data),
         mimeType: payload.mimeType ?? 'image/jpeg',
         caption: payload.caption,
       }
@@ -93,7 +93,7 @@ function parseMessageContent(payload: WatiWebhookPayload): IncomingMessage {
     case 'video':
       return {
         type: 'video',
-        mediaId: payload.mediaUrl ?? '',
+        mediaId: firstString(payload.mediaUrl, payload.data),
         mimeType: payload.mimeType ?? 'video/mp4',
         caption: payload.caption,
       }
@@ -101,14 +101,14 @@ function parseMessageContent(payload: WatiWebhookPayload): IncomingMessage {
     case 'audio':
       return {
         type: 'audio',
-        mediaId: payload.mediaUrl ?? '',
+        mediaId: firstString(payload.mediaUrl, payload.data),
         mimeType: payload.mimeType ?? 'audio/ogg',
       }
 
     case 'document':
       return {
         type: 'document',
-        mediaId: payload.mediaUrl ?? '',
+        mediaId: firstString(payload.mediaUrl, payload.data),
         mimeType: payload.mimeType ?? 'application/octet-stream',
         filename: payload.filename,
         caption: payload.caption,
@@ -144,12 +144,13 @@ function parseStatusUpdate(
     error: 'failed',
   }
 
-  const status = statusMap[payload.statusString?.toLowerCase() ?? ''] ?? 'sent'
+  const status = statusMap[payload.statusString?.toLowerCase() ?? '']
+  if (!status) return []
 
   return [
     {
       type: 'status',
-      messageId: payload.localMessageId ?? payload.messageId ?? '',
+      messageId: firstString(payload.localMessageId, payload.messageId, payload.whatsappMessageId, payload.id),
       status,
       recipientId: payload.waId ?? '',
       timestamp: parseWatiTimestamp(payload.timestamp),
@@ -182,6 +183,13 @@ function buildMetadata(payload: WatiWebhookPayload, includeRaw: boolean): Webhoo
     provider: 'wati',
     ...(includeRaw ? { raw: payload } : {}),
   }
+}
+
+function firstString(...values: Array<string | undefined>): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
 }
 
 function detectEventType(payload: WatiWebhookPayload): string {

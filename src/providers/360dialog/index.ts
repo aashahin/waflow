@@ -62,13 +62,14 @@ export class Dialog360Provider implements WhatsAppProviderAdapter {
       rateLimiter: new RateLimiter(options.rateLimit),
       retry: options.retry ?? {},
       hooks: options.hooks,
+      signal: options.signal,
     })
   }
 
   // -- Messaging (reuses Cloud API mapper) --------------------------------
 
   async sendMessage(message: OutboundMessage): Promise<SendResult> {
-    const payload = mapOutboundToCloudApi(message)
+    const payload = mapOutboundToCloudApi(message, this.name)
 
     const response = await this.http.request<CloudApiSendResponse>({
       method: 'POST',
@@ -76,7 +77,7 @@ export class Dialog360Provider implements WhatsAppProviderAdapter {
       body: payload,
     })
 
-    const messageId = response.data.messages[0]?.id ?? ''
+    const messageId = response.data?.messages?.[0]?.id ?? ''
 
     if (!messageId) {
       throw new ProviderError({
@@ -133,6 +134,7 @@ export class Dialog360Provider implements WhatsAppProviderAdapter {
     const response = await this.http.uploadRequest<CloudApiMediaUploadResponse>(
       '/media',
       formData,
+      { timeout: params.timeout },
     )
 
     return { id: response.data.id }

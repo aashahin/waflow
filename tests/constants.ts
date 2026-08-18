@@ -35,8 +35,8 @@ export const TEST_DATA = {
   // Provider Configs
   config: {
     wati: {
-      apiKey: 'wati_de45d51e-961d-4acf-9c9c-9246de839623.pUh8lFQrKl2Tif5jWiqBn-lStX7JPhXIAGfrnbbBrLD1lQKyvnOh4hVdiuJ4B1QMxuZy3xcMGX7UG3Fl6QGPaL_EQUigOKjP12tdGF_W-Yi-PJu4gZWPaUvcNf63xwoY',
-      baseUrl: 'https://live-mt-server.wati.io/10144080',
+      apiKey: 'wati_test-api-key',
+      baseUrl: 'https://live-mt-server.wati.io/00000000',
       channelNumber: '201012345678',
       webhookSecret: 'wati-webhook-secret',
     },

@@ -64,6 +64,44 @@ describe('parseCloudApiWebhook', () => {
     }
   })
 
+  test('does not attach another contact when wa_id does not match', () => {
+    const events = parseCloudApiWebhook({
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          id: '1',
+          changes: [
+            {
+              field: 'messages',
+              value: {
+                messaging_product: 'whatsapp',
+                metadata: {
+                  display_phone_number: '1',
+                  phone_number_id: 'pn',
+                },
+                contacts: [{ profile: { name: 'Ahmad' }, wa_id: '966500000000' }],
+                messages: [
+                  {
+                    id: 'wamid.other',
+                    from: TEST_DATA.phone.primaryNormalized,
+                    timestamp: '1700000000',
+                    type: 'text',
+                    text: { body: 'hi' },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(events[0]?.type).toBe('message')
+    if (events[0]?.type === 'message') {
+      expect(events[0].contact).toBeUndefined()
+    }
+  })
+
   test('parses incoming image message', () => {
     const payload = {
       object: 'whatsapp_business_account',
@@ -268,5 +306,91 @@ describe('parseCloudApiWebhook', () => {
 
     const events = parseCloudApiWebhook(payload, '360dialog')
     expect(events[0]?.metadata.provider).toBe('360dialog')
+  })
+
+  test('does not throw on malformed entries', () => {
+    expect(parseCloudApiWebhook({ entry: [null] })).toEqual([])
+    expect(parseCloudApiWebhook({ entry: [{}] })).toEqual([])
+    expect(parseCloudApiWebhook({ entry: [{ changes: null }] })).toEqual([])
+    expect(parseCloudApiWebhook({ entry: [{ changes: [{ field: 'messages' }] }] })).toEqual([])
+    expect(
+      parseCloudApiWebhook({
+        entry: [{ changes: [{ field: 'messages', value: {} }] }],
+      }),
+    ).toEqual([])
+  })
+
+  test('parses template button replies and reply context', () => {
+    const events = parseCloudApiWebhook({
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          id: '1',
+          changes: [
+            {
+              field: 'messages',
+              value: {
+                messaging_product: 'whatsapp',
+                metadata: {
+                  display_phone_number: '1',
+                  phone_number_id: 'pn',
+                },
+                messages: [
+                  {
+                    id: 'wamid.btn',
+                    from: TEST_DATA.phone.primaryNormalized,
+                    timestamp: '1700000000',
+                    type: 'button',
+                    button: { text: 'Yes', payload: 'YES' },
+                    context: { from: '1555', id: 'wamid.orig' },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(events).toHaveLength(1)
+    if (events[0]?.type === 'message') {
+      expect(events[0].message).toEqual({ type: 'button_reply', buttonId: 'YES', title: 'Yes' })
+      expect(events[0].context).toEqual({ messageId: 'wamid.orig', from: '1555' })
+    }
+  })
+
+  test('parses template status updates', () => {
+    const events = parseCloudApiWebhook({
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          id: '1',
+          changes: [
+            {
+              field: 'message_template_status_update',
+              value: {
+                event: 'APPROVED',
+                message_template_id: 99,
+                message_template_name: 'login_code',
+                message_template_language: 'en_US',
+                reason: 'NONE',
+              },
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(events).toEqual([
+      {
+        type: 'template_status',
+        templateId: '99',
+        templateName: 'login_code',
+        language: 'en_US',
+        status: 'APPROVED',
+        reason: 'NONE',
+        metadata: { provider: 'cloud-api' },
+      },
+    ])
   })
 })

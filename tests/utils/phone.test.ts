@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test'
 import { normalizePhoneNumber } from '../../src/utils/phone.js'
+import { ValidationError } from '../../src/core/errors.js'
 
 describe('normalizePhoneNumber', () => {
   test('strips + prefix from E.164 numbers', () => {
@@ -24,7 +25,7 @@ describe('normalizePhoneNumber', () => {
   })
 
   test('throws on numbers that are too short', () => {
-    expect(() => normalizePhoneNumber('12345')).toThrow()
+    expect(() => normalizePhoneNumber('12345')).toThrow(ValidationError)
   })
 
   test('throws on numbers that are too long', () => {
