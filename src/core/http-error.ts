@@ -102,16 +102,20 @@ export function throwForHttpError(opts: {
     })
   }
 
-  if (opts.status === 403) {
-    throw new AuthenticationError({
-      message: `Access forbidden: ${loc}${detail}`,
+  if (graph?.code !== undefined && graph.code >= 130000) {
+    throw new ProviderError({
+      message: `Provider error (${opts.status}): ${loc}${detail}`,
       ...context,
     })
   }
 
-  if (graph?.code !== undefined && graph.code >= 130000) {
+  if (opts.status === 403) {
+    // 403 is usually a WhatsApp business/policy error, not an expired token.
+    // Auth codes (#190, etc.) already returned AuthenticationError above.
+    // Do not key off Graph `type: OAuthException` — Meta uses that for 13xxxx
+    // business errors too.
     throw new ProviderError({
-      message: `Provider error (${opts.status}): ${loc}${detail}`,
+      message: `Access forbidden: ${loc}${detail}`,
       ...context,
     })
   }

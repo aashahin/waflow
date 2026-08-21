@@ -2,6 +2,7 @@
   "name": "waflow",
   "version": "0.6.0",
   "type": "module",
+  "sideEffects": false,
   "description": "Unified WhatsApp provider SDK — one interface, any provider.",
   "license": "MIT",
   "main": "./dist/index.cjs",

@@ -69,6 +69,10 @@ export class MediaError extends WhatsAppError {
   }
 }
 
+/**
+ * Reserved for consumers and future SDK use. Template send/create failures
+ * currently throw `ProviderError` or `ValidationError`.
+ */
 export class TemplateError extends WhatsAppError {
   constructor(opts: Omit<ConstructorParameters<typeof WhatsAppError>[0], 'code'>) {
     super({ ...opts, code: 'TEMPLATE_ERROR' })
@@ -104,6 +108,10 @@ export class TimeoutError extends WhatsAppError {
   }
 }
 
+/**
+ * Reserved for consumers and future SDK use.
+ * `webhook.verify()` returns a boolean and does not throw `WebhookVerificationError`.
+ */
 export class WebhookVerificationError extends WhatsAppError {
   constructor(opts: Omit<ConstructorParameters<typeof WhatsAppError>[0], 'code'>) {
     super({ ...opts, code: 'WEBHOOK_VERIFICATION_FAILED' })

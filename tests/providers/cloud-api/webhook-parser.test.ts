@@ -359,6 +359,162 @@ describe('parseCloudApiWebhook', () => {
     }
   })
 
+  test('still emits a message when msg.errors is present', () => {
+    const events = parseCloudApiWebhook({
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          id: '1',
+          changes: [
+            {
+              field: 'messages',
+              value: {
+                messaging_product: 'whatsapp',
+                metadata: {
+                  display_phone_number: '1',
+                  phone_number_id: 'pn',
+                },
+                messages: [
+                  {
+                    id: 'wamid.err-msg',
+                    from: TEST_DATA.phone.primaryNormalized,
+                    timestamp: '1700000000',
+                    type: 'text',
+                    text: { body: 'still here' },
+                    errors: [
+                      { code: 131051, title: 'Unsupported message type', message: 'Message type is not supported' },
+                    ],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(events).toHaveLength(1)
+    expect(events[0]?.type).toBe('message')
+    if (events[0]?.type === 'message') {
+      expect(events[0].messageId).toBe('wamid.err-msg')
+      expect(events[0].message).toEqual({ type: 'text', body: 'still here' })
+    }
+  })
+
+  test('parses nfm_reply as unknown with the raw message', () => {
+    const rawMessage = {
+      id: 'wamid.nfm',
+      from: TEST_DATA.phone.primaryNormalized,
+      timestamp: '1700000000',
+      type: 'nfm_reply',
+      nfm_reply: { name: 'flow', response_json: '{"a":1}', body: 'sent' },
+    }
+    const events = parseCloudApiWebhook({
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          id: '1',
+          changes: [
+            {
+              field: 'messages',
+              value: {
+                messaging_product: 'whatsapp',
+                metadata: {
+                  display_phone_number: '1',
+                  phone_number_id: 'pn',
+                },
+                messages: [rawMessage],
+              },
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(events).toHaveLength(1)
+    if (events[0]?.type === 'message') {
+      expect(events[0].message).toEqual({ type: 'unknown', raw: rawMessage })
+    }
+  })
+
+  test('parses smb_message_echoes like inbound messages', () => {
+    const events = parseCloudApiWebhook({
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          id: '1',
+          changes: [
+            {
+              field: 'smb_message_echoes',
+              value: {
+                messaging_product: 'whatsapp',
+                metadata: {
+                  display_phone_number: '1',
+                  phone_number_id: 'pn',
+                },
+                messages: [
+                  {
+                    id: 'wamid.smb-echo',
+                    from: TEST_DATA.phone.primaryNormalized,
+                    timestamp: '1700000000',
+                    type: 'text',
+                    text: { body: 'echo from smb' },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(events).toHaveLength(1)
+    expect(events[0]?.type).toBe('message')
+    if (events[0]?.type === 'message') {
+      expect(events[0].messageId).toBe('wamid.smb-echo')
+      expect(events[0].message).toEqual({ type: 'text', body: 'echo from smb' })
+    }
+  })
+
+  test('parses message_echoes like inbound messages', () => {
+    const events = parseCloudApiWebhook({
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          id: '1',
+          changes: [
+            {
+              field: 'message_echoes',
+              value: {
+                messaging_product: 'whatsapp',
+                metadata: {
+                  display_phone_number: '1',
+                  phone_number_id: 'pn',
+                },
+                messages: [
+                  {
+                    id: 'wamid.echo',
+                    from: TEST_DATA.phone.primaryNormalized,
+                    timestamp: '1700000000',
+                    type: 'text',
+                    text: { body: 'echo' },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(events).toHaveLength(1)
+    expect(events[0]?.type).toBe('message')
+    if (events[0]?.type === 'message') {
+      expect(events[0].messageId).toBe('wamid.echo')
+      expect(events[0].message).toEqual({ type: 'text', body: 'echo' })
+    }
+  })
+
   test('parses template status updates', () => {
     const events = parseCloudApiWebhook({
       object: 'whatsapp_business_account',

@@ -129,11 +129,25 @@ export function mapOutboundToCloudApi(
       }
 
     case 'interactive.button':
+      if (message.buttons.length === 0) {
+        throw new ValidationError({
+          message: 'Interactive buttons: at least 1 button is required',
+          provider,
+        })
+      }
       if (message.buttons.length > 3) {
         throw new ValidationError({
           message: `Interactive buttons: maximum 3 buttons allowed, got ${message.buttons.length}`,
           provider,
         })
+      }
+      for (const button of message.buttons) {
+        if (button.title.length > 20) {
+          throw new ValidationError({
+            message: `Interactive buttons: title exceeds 20 characters (got ${button.title.length})`,
+            provider,
+          })
+        }
       }
       return {
         ...base,
@@ -153,6 +167,12 @@ export function mapOutboundToCloudApi(
       }
 
     case 'interactive.list': {
+      if (message.buttonText.length > 20) {
+        throw new ValidationError({
+          message: `Interactive list: button text exceeds 20 characters (got ${message.buttonText.length})`,
+          provider,
+        })
+      }
       if (message.sections.length > 10) {
         throw new ValidationError({
           message: `Interactive list: maximum 10 sections allowed, got ${message.sections.length}`,
@@ -166,6 +186,22 @@ export function mapOutboundToCloudApi(
           message: `Interactive list: maximum 10 rows total across all sections, got ${totalRows}`,
           provider,
         })
+      }
+      for (const section of message.sections) {
+        if (section.title.length > 24) {
+          throw new ValidationError({
+            message: `Interactive list: section title exceeds 24 characters (got ${section.title.length})`,
+            provider,
+          })
+        }
+        for (const row of section.rows) {
+          if (row.title.length > 24) {
+            throw new ValidationError({
+              message: `Interactive list: row title exceeds 24 characters (got ${row.title.length})`,
+              provider,
+            })
+          }
+        }
       }
       return {
         ...base,

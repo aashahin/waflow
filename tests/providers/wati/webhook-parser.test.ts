@@ -82,6 +82,36 @@ describe('parseWatiWebhook', () => {
       }
     })
 
+    test('parses 10-digit unix timestamps as seconds', () => {
+      const events = parseWatiWebhook({
+        eventType: 'message',
+        waId: TEST_DATA.phone.primaryNormalized,
+        type: 'text',
+        text: 'hello',
+        timestamp: '1704067200',
+      })
+
+      expect(events[0]?.type).toBe('message')
+      if (events[0]?.type === 'message') {
+        expect(events[0].timestamp.toISOString()).toBe('2024-01-01T00:00:00.000Z')
+      }
+    })
+
+    test('parses 13-digit unix timestamps as milliseconds', () => {
+      const events = parseWatiWebhook({
+        eventType: 'message',
+        waId: TEST_DATA.phone.primaryNormalized,
+        type: 'text',
+        text: 'hello',
+        timestamp: '1704067200000',
+      })
+
+      expect(events[0]?.type).toBe('message')
+      if (events[0]?.type === 'message') {
+        expect(events[0].timestamp.toISOString()).toBe('2024-01-01T00:00:00.000Z')
+      }
+    })
+
     test('parses image message', () => {
       const events = parseWatiWebhook({
         eventType: 'message',

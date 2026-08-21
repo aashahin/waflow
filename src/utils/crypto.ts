@@ -16,6 +16,15 @@ export async function verifyHmacSha256(
   signature: string,
   secret: string,
 ): Promise<boolean> {
+  // Meta-style headers use "sha256="; some send "SHA256=".
+  const hex =
+    signature.length >= 7 && signature.slice(0, 7).toLowerCase() === 'sha256='
+      ? signature.slice(7)
+      : signature
+  const expected = hex.toLowerCase()
+  // SHA-256 digest hex is always 64 lowercase hex chars (public shape).
+  if (!/^[0-9a-f]{64}$/.test(expected)) return false
+
   const encoder = new TextEncoder()
 
   const key = await crypto.subtle.importKey(
@@ -28,11 +37,6 @@ export async function verifyHmacSha256(
 
   const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(body))
   const computed = arrayBufferToHex(sig)
-
-  // Strip "sha256=" prefix if present
-  const expected = signature.startsWith('sha256=')
-    ? signature.slice(7)
-    : signature
 
   return timingSafeEqual(computed, expected)
 }

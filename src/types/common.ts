@@ -14,8 +14,11 @@ export type MediaId = string
 /** ISO 8601 timestamp string */
 export type Timestamp = string
 
-/** Supported provider identifiers */
-export type ProviderName = 'cloud-api' | '360dialog' | 'wati'
+/**
+ * Provider identifier. Known names autocomplete; custom adapter names are
+ * also allowed (`createWhatsAppFromAdapter`).
+ */
+export type ProviderName = 'cloud-api' | '360dialog' | 'wati' | (string & {})
 
 /** Result of any successful send operation */
 export interface SendResult {

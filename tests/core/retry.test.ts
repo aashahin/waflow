@@ -116,6 +116,45 @@ describe('withRetry — idempotency-aware policy', () => {
   })
 })
 
+describe('withRetry — abort signal', () => {
+  test('already-aborted signal does not call fn', async () => {
+    const ac = new AbortController()
+    ac.abort()
+    let calls = 0
+    try {
+      await withRetry(async () => {
+        calls++
+        return 'ok'
+      }, FAST, noopLogger, { idempotent: true, signal: ac.signal })
+      throw new Error('expected throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(NetworkError)
+      expect((error as NetworkError).retryable).toBe(false)
+      expect((error as NetworkError).message).toBe('Request aborted')
+    }
+    expect(calls).toBe(0)
+  })
+
+  test('abort during retry sleep does not wait full delay', async () => {
+    const cfg = resolveRetryConfig({ maxRetries: 3, baseDelay: 200, maxDelay: 200 })
+    const ac = new AbortController()
+    const { fn, calls } = failing(new NetworkError({ message: 'down' }), Infinity)
+    const start = Date.now()
+    const pending = withRetry(fn, cfg, noopLogger, { idempotent: true, signal: ac.signal })
+    setTimeout(() => ac.abort(), 15)
+    try {
+      await pending
+      throw new Error('expected throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(NetworkError)
+      expect((error as NetworkError).retryable).toBe(false)
+      expect((error as NetworkError).message).toBe('Request aborted')
+    }
+    expect(Date.now() - start).toBeLessThan(120)
+    expect(calls()).toBe(1)
+  })
+})
+
 describe('resolveRetryConfig — validation', () => {
   test('rejects negative maxRetries', () => {
     expect(() => resolveRetryConfig({ maxRetries: -1 })).toThrow(RangeError)

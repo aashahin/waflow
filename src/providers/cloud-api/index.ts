@@ -14,6 +14,7 @@ import { HttpClient } from '../../core/http.js'
 import { RateLimiter } from '../../core/rate-limiter.js'
 import { noopLogger, type Logger } from '../../core/logger.js'
 import { MediaError, ValidationError, ProviderError } from '../../core/errors.js'
+import { resolveHttpDownloadUrl } from '../../core/url-guard.js'
 import { mapOutboundToCloudApi } from './mapper.js'
 import { parseCloudApiWebhook } from './webhook-parser.js'
 import { verifyHmacSha256, timingSafeEqual } from '../../utils/crypto.js'
@@ -169,23 +170,23 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
     }
 
     return {
-      url,
+      url: resolveHttpDownloadUrl(url) ?? url,
       mimeType: response.data?.mime_type,
       sha256: response.data?.sha256,
-      fileSize: response.data?.file_size ? parseInt(response.data.file_size, 10) : undefined,
+      fileSize: parseOptionalFileSize(response.data?.file_size),
     }
   }
 
   async downloadMedia(mediaIdOrUrl: string, options?: MediaDownloadOptions): Promise<MediaDownloadResult> {
-    // If it's a media ID, first get the download URL
     let downloadUrl: string
     let expectedMimeType: string | undefined
 
-    if (mediaIdOrUrl.startsWith('http://') || mediaIdOrUrl.startsWith('https://')) {
-      downloadUrl = mediaIdOrUrl
+    const absoluteUrl = resolveHttpDownloadUrl(mediaIdOrUrl)
+    if (absoluteUrl) {
+      downloadUrl = absoluteUrl
     } else {
       const mediaInfo = await this.getMediaUrl(mediaIdOrUrl)
-      downloadUrl = mediaInfo.url
+      downloadUrl = resolveHttpDownloadUrl(mediaInfo.url) ?? mediaInfo.url
       expectedMimeType = mediaInfo.mimeType
     }
 
@@ -372,6 +373,16 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
 // ---------------------------------------------------------------------------
 // Module-level helpers
 // ---------------------------------------------------------------------------
+
+/** Parse Graph `file_size` even when it is `0` or `'0'` (a truthy check drops numeric 0). */
+export function parseOptionalFileSize(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number.parseInt(value, 10)
+    return Number.isFinite(parsed) ? parsed : undefined
+  }
+  return undefined
+}
 
 /**
  * Extract the body stream from a Response, throwing if empty.

@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import type { RateLimitConfig } from '../types/config.js'
-import { RateLimitError, TimeoutError } from './errors.js'
+import { NetworkError, RateLimitError, TimeoutError } from './errors.js'
 
 const DEFAULT_MAX_RPS = 80 // WhatsApp Cloud API default
 const DEFAULT_MAX_QUEUE = 10_000 // overload protection — bounds memory
@@ -14,6 +14,13 @@ interface Waiter {
   grant: () => void
   fail: (error: unknown) => void
   settled: boolean
+}
+
+function abortedWaitError(): NetworkError {
+  return new NetworkError({
+    message: 'Request aborted',
+    retryable: false,
+  })
 }
 
 /**
@@ -92,8 +99,14 @@ export class RateLimiter {
    *   (bounds memory under sustained overload).
    * - Rejects with a `TimeoutError` if it waits longer than `queueTimeoutMs`,
    *   so a request never hangs forever before its fetch even starts.
+   * - Rejects with a `TimeoutError` (`retryable: false`) if `signal` is aborted
+   *   before a token is granted — including when it was already aborted.
    */
-  async acquire(): Promise<void> {
+  async acquire(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) {
+      throw abortedWaitError()
+    }
+
     this.refill()
     // Serve already-queued waiters first (FIFO) with any tokens that refilled —
     // don't make them wait for the next drain-timer tick when a token is free now.
@@ -114,14 +127,15 @@ export class RateLimiter {
     return new Promise<void>((resolve, reject) => {
       const waiter: Waiter = { settled: false, grant: () => {}, fail: () => {} }
 
+      const onAbort = () => {
+        waiter.fail(abortedWaitError())
+      }
+
       const timer = setTimeout(() => {
-        if (waiter.settled) return
-        waiter.settled = true
-        const idx = this.waitQueue.indexOf(waiter)
-        if (idx >= 0) this.waitQueue.splice(idx, 1)
-        reject(
+        waiter.fail(
           new TimeoutError({
             message: `Timed out after ${this.queueTimeoutMs}ms waiting for a rate-limit token`,
+            retryable: false,
           }),
         )
       }, this.queueTimeoutMs)
@@ -130,6 +144,7 @@ export class RateLimiter {
         if (waiter.settled) return
         waiter.settled = true
         clearTimeout(timer)
+        signal?.removeEventListener('abort', onAbort)
         resolve()
       }
 
@@ -137,7 +152,19 @@ export class RateLimiter {
         if (waiter.settled) return
         waiter.settled = true
         clearTimeout(timer)
+        signal?.removeEventListener('abort', onAbort)
+        const idx = this.waitQueue.indexOf(waiter)
+        if (idx >= 0) this.waitQueue.splice(idx, 1)
         reject(error)
+      }
+
+      if (signal) {
+        signal.addEventListener('abort', onAbort, { once: true })
+        // Recheck after subscribe so an abort that raced the listener still fails.
+        if (signal.aborted) {
+          onAbort()
+          return
+        }
       }
 
       this.waitQueue.push(waiter)
@@ -183,6 +210,7 @@ export class RateLimiter {
       this.waitQueue.shift()?.fail(
         new TimeoutError({
           message: 'Rate limiter destroyed',
+          retryable: false,
         }),
       )
     }

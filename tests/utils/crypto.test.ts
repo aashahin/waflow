@@ -1,6 +1,21 @@
 import { describe, test, expect } from 'bun:test'
 import { timingSafeEqual, verifyHmacSha256 } from '../../src/utils/crypto.js'
 
+async function hmacHex(body: string, secret: string): Promise<string> {
+  const encoder = new TextEncoder()
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(body))
+  return Array.from(new Uint8Array(sig))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('')
+}
+
 describe('verifyHmacSha256', () => {
   const secret = 'test-secret-key-32-chars-minimum'
   const body = '{"entry":[{"id":"123"}]}'
@@ -65,6 +80,27 @@ describe('verifyHmacSha256', () => {
   test('rejects signatures of different lengths', async () => {
     expect(await verifyHmacSha256(body, 'abc', secret)).toBe(false)
     expect(await verifyHmacSha256(body, '', secret)).toBe(false)
+  })
+
+  test('verifies an uppercase hex signature', async () => {
+    const hex = await hmacHex(body, secret)
+    expect(await verifyHmacSha256(body, hex.toUpperCase(), secret)).toBe(true)
+  })
+
+  test('verifies sha256= prefix with uppercase hex', async () => {
+    const hex = await hmacHex(body, secret)
+    expect(await verifyHmacSha256(body, `sha256=${hex.toUpperCase()}`, secret)).toBe(
+      true,
+    )
+  })
+
+  test('verifies SHA256= prefix', async () => {
+    const hex = await hmacHex(body, secret)
+    expect(await verifyHmacSha256(body, `SHA256=${hex}`, secret)).toBe(true)
+  })
+
+  test('rejects a 64-char non-hex signature', async () => {
+    expect(await verifyHmacSha256(body, 'g'.repeat(64), secret)).toBe(false)
   })
 })
 

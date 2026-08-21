@@ -257,12 +257,39 @@ describe('Dialog360Provider', () => {
       }
     })
 
+    test.each(['0', 0] as const)('getMediaUrl parses file_size %p as 0', async (fileSize) => {
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = mock(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              id: TEST_DATA.mediaId.media123,
+              url: 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1',
+              mime_type: 'image/jpeg',
+              sha256: 'abc',
+              file_size: fileSize,
+              messaging_product: 'whatsapp',
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        ),
+      ) as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        const result = await provider.getMediaUrl(TEST_DATA.mediaId.media123)
+        expect(result.fileSize).toBe(0)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
     test('defaults base URL when not provided', () => {
       const provider = createProvider({ baseUrl: undefined })
       expect(provider.name).toBe('360dialog')
     })
 
-    test('does not send D360-API-KEY to Meta CDNs', async () => {
+    test('rewrites Meta lookaside URLs onto the 360dialog origin and keeps D360-API-KEY', async () => {
       const originalFetch = globalThis.fetch
       const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) =>
         Promise.resolve(
@@ -276,8 +303,108 @@ describe('Dialog360Provider', () => {
 
       try {
         const provider = createProvider()
-        await provider.downloadMedia('https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1')
+        await provider.downloadMedia(
+          'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1&ext=1&hash=x',
+        )
 
+        expect(fetchMock.mock.calls[0]?.[0]).toBe(
+          'https://waba-v2.360dialog.io/whatsapp_business/attachments/?mid=1&ext=1&hash=x',
+        )
+        const headers = (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.headers as Record<string, string>
+        expect(headers['D360-API-KEY']).toBe(TEST_DATA.config.dialog360.apiKey)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('folds uppercase HTTPS lookaside URLs before rewriting', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) =>
+        Promise.resolve(
+          new Response('ok', {
+            status: 200,
+            headers: { 'content-type': 'image/jpeg' },
+          }),
+        ),
+      )
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        await provider.downloadMedia(
+          'HTTPS://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1&ext=1&hash=x',
+        )
+
+        expect(fetchMock.mock.calls[0]?.[0]).toBe(
+          'https://waba-v2.360dialog.io/whatsapp_business/attachments/?mid=1&ext=1&hash=x',
+        )
+        const headers = (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.headers as Record<string, string>
+        expect(headers['D360-API-KEY']).toBe(TEST_DATA.config.dialog360.apiKey)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('downloadMedia rewrites lookaside URL from getMediaUrl onto the 360dialog origin and keeps D360-API-KEY', async () => {
+      const originalFetch = globalThis.fetch
+      const lookaside = 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1&ext=1&hash=x'
+      const fetchMock = mock((url: string | URL | Request) => {
+        if (String(url).endsWith(`/${TEST_DATA.mediaId.media123}`)) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                id: TEST_DATA.mediaId.media123,
+                url: lookaside,
+                mime_type: 'image/jpeg',
+                sha256: 'abc',
+                file_size: '123',
+                messaging_product: 'whatsapp',
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            ),
+          )
+        }
+        return Promise.resolve(
+          new Response('ok', {
+            status: 200,
+            headers: { 'content-type': 'image/jpeg' },
+          }),
+        )
+      })
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        await provider.downloadMedia(TEST_DATA.mediaId.media123)
+
+        expect(fetchMock.mock.calls).toHaveLength(2)
+        expect(fetchMock.mock.calls[1]?.[0]).toBe(
+          'https://waba-v2.360dialog.io/whatsapp_business/attachments/?mid=1&ext=1&hash=x',
+        )
+        const headers = (fetchMock.mock.calls[1]?.[1] as RequestInit | undefined)?.headers as Record<string, string>
+        expect(headers['D360-API-KEY']).toBe(TEST_DATA.config.dialog360.apiKey)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('does not send D360-API-KEY to untrusted hosts', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) =>
+        Promise.resolve(
+          new Response('ok', {
+            status: 200,
+            headers: { 'content-type': 'image/jpeg' },
+          }),
+        ),
+      )
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        await provider.downloadMedia('https://cdn.example.com/photo.jpg')
+
+        expect(fetchMock.mock.calls[0]?.[0]).toBe('https://cdn.example.com/photo.jpg')
         const headers = (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.headers as Record<string, string>
         expect(headers['D360-API-KEY']).toBeUndefined()
       } finally {

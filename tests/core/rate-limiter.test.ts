@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test'
 import { RateLimiter } from '../../src/core/rate-limiter.js'
-import { RateLimitError, TimeoutError } from '../../src/core/errors.js'
+import { NetworkError, RateLimitError, TimeoutError } from '../../src/core/errors.js'
 
 describe('RateLimiter', () => {
   test('allows requests within the rate limit', async () => {
@@ -91,7 +91,13 @@ describe('RateLimiter', () => {
     const limiter = new RateLimiter({ maxRequestsPerSecond: 1, queueTimeoutMs: 50 })
 
     await limiter.acquire() // consume the token
-    await expect(limiter.acquire()).rejects.toBeInstanceOf(TimeoutError)
+    try {
+      await limiter.acquire()
+      throw new Error('expected throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(TimeoutError)
+      expect((error as TimeoutError).retryable).toBe(false)
+    }
 
     limiter.destroy()
   })
@@ -109,6 +115,43 @@ describe('RateLimiter', () => {
 
     await Promise.all([a, b])
     expect(order).toEqual([1, 2])
+    limiter.destroy()
+  })
+
+  test('acquire with already-aborted signal rejects immediately without consuming a token', async () => {
+    const limiter = new RateLimiter({ maxRequestsPerSecond: 1 })
+    const ac = new AbortController()
+    ac.abort()
+    const start = Date.now()
+    try {
+      await limiter.acquire(ac.signal)
+      throw new Error('expected throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(NetworkError)
+      expect((error as NetworkError).message).toBe('Request aborted')
+      expect((error as NetworkError).retryable).toBe(false)
+    }
+    expect(Date.now() - start).toBeLessThan(50)
+    await limiter.acquire()
+    limiter.destroy()
+  })
+
+  test('acquire aborted while queued rejects without hanging', async () => {
+    const limiter = new RateLimiter({ maxRequestsPerSecond: 1, queueTimeoutMs: 5_000 })
+    await limiter.acquire()
+    const ac = new AbortController()
+    const start = Date.now()
+    const pending = limiter.acquire(ac.signal)
+    setTimeout(() => ac.abort(), 15)
+    try {
+      await pending
+      throw new Error('expected throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(NetworkError)
+      expect((error as NetworkError).message).toBe('Request aborted')
+      expect((error as NetworkError).retryable).toBe(false)
+    }
+    expect(Date.now() - start).toBeLessThan(200)
     limiter.destroy()
   })
 })
