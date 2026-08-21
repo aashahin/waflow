@@ -97,7 +97,10 @@ export interface RateLimitConfig {
 }
 
 export interface ClientHooks {
-  /** Called before every outbound HTTP request */
+  /**
+   * Called before every outbound HTTP request.
+   * `body` may contain OTP codes and template parameters — do not log it in production.
+   */
   onRequest?: (info: { url: string; method: string; body?: unknown }) => void
   /** Called after every HTTP response */
   onResponse?: (info: { url: string; status: number; durationMs: number }) => void

@@ -140,9 +140,10 @@ export class WatiProvider implements WhatsAppProviderAdapter {
     const messageId = extractMessageId(response.data)
 
     if (!messageId) {
-      this.logger.warn('Wati accepted the send request without a message ID', {
-        messageType: message.type,
-        path: mapped.path,
+      throw new ProviderError({
+        message: 'Provider returned no message ID — the send may not have succeeded',
+        provider: this.name,
+        statusCode: response.status,
         raw: response.data,
       })
     }

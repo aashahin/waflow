@@ -50,7 +50,14 @@ export function parseCloudApiWebhook(
         continue
       }
 
-      if (field !== 'messages') continue
+      // Echo fields carry the same `value.messages` shape as inbound messages.
+      if (
+        field !== 'messages'
+        && field !== 'smb_message_echoes'
+        && field !== 'message_echoes'
+      ) {
+        continue
+      }
 
       const metadata = buildMetadata(value, raw, providerName)
 
@@ -209,6 +216,9 @@ function parseIncomingMessage(msg: CloudApiRawMessage): IncomingMessage {
         type: 'contacts',
         contacts: msg.contacts ?? [],
       }
+
+    case 'nfm_reply':
+      return { type: 'unknown', raw: msg }
 
     default:
       return { type: 'unknown', raw: msg }

@@ -3,6 +3,47 @@
 All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/) (pre-1.0: breaking changes bump the minor).
 
+## Unreleased (0.7.0)
+
+Download rewrite, abort, SSRF, webhook HMAC, and classification hardening.
+
+### Breaking
+
+- **Wati throws `ProviderError`** when a send is accepted (`result: true`)
+  without a message id (0.6.0 returned `messageId: ''`). Cloud API / 360dialog
+  already threw on an empty id.
+- **360dialog `media.download`** rewrites Meta `lookaside.fbsbx.com` (and other
+  Meta CDN) URLs onto the configured `baseUrl` (default
+  `https://waba-v2.360dialog.io`) and sends `D360-API-KEY` there. Meta CDNs are
+  never fetched with the 360dialog key.
+
+### Fixed
+
+- SSRF checks apply to **caller-supplied absolute URLs**, not the configured API
+  `baseUrl`, so localhost mocks work.
+- SSRF hardening: private IPv6 (loopback / link-local / ULA), IPv4-mapped /
+  compatible / 6to4 / NAT64 encodings of private IPv4, CGNAT (`100.64.0.0/10`),
+  and redirect-target checks. Credentials are stripped on `https` → `http` hops.
+  Public IPv6 is not blocked. Hostnames are not DNS-resolved.
+- Caller abort cancels retry backoff sleep and the rate-limiter wait queue.
+- Webhook HMAC SHA-256 signatures are compared **case-insensitively as hex**
+  (optional `sha256=` prefix is also case-insensitive).
+- **HTTP 403** is `ProviderError` unless Graph already classified an auth
+  code (`#190`, etc.). `type: OAuthException` is **not** treated as auth —
+  Meta uses that type on 13xxxx business errors too.
+- Interactive **button titles ≤ 20** characters and **list section/row titles ≤ 24**
+  characters are validated.
+- Per-request and client-level `AbortSignal`s are merged (either can cancel).
+  Abort while waiting for a rate-limit token is `NetworkError` (`retryable: false`),
+  not `TimeoutError`.
+- HMAC signatures must be 64 hex characters (non-hex of that length is rejected).
+
+### Added
+
+- `ProviderName` still autocompletes `'cloud-api' | '360dialog' | 'wati'` and
+  also accepts custom adapter names (`string & {}`). `SendResult.provider`
+  follows.
+
 ## 0.6.0
 
 Second production audit: downloads, Wati correctness, retry/SSRF hardening.

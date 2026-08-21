@@ -310,7 +310,7 @@ describe('WatiProvider', () => {
       }
     })
 
-    test('allows successful sends when Wati omits a message ID', async () => {
+    test('throws ProviderError when Wati omits a message ID', async () => {
       const originalFetch = globalThis.fetch
       globalThis.fetch = mock((_url: string | URL | Request, _init?: RequestInit) =>
         Promise.resolve(
@@ -324,14 +324,13 @@ describe('WatiProvider', () => {
       try {
         const provider = createProvider()
 
-        const result = await provider.sendMessage({
-          type: 'text',
-          to: TEST_DATA.phone.primary,
-          text: { body: 'test' },
-        })
-
-        expect(result.messageId).toBe('')
-        expect(result.provider).toBe('wati')
+        await expect(
+          provider.sendMessage({
+            type: 'text',
+            to: TEST_DATA.phone.primary,
+            text: { body: 'test' },
+          }),
+        ).rejects.toBeInstanceOf(ProviderError)
       } finally {
         globalThis.fetch = originalFetch
       }

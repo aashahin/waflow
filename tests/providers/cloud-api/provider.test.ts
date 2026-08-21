@@ -459,6 +459,31 @@ describe('CloudApiProvider', () => {
       }
     })
 
+    test('treats uppercase HTTPS URLs as absolute download URLs', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) =>
+        Promise.resolve(
+          new Response('ok', {
+            status: 200,
+            headers: { 'content-type': 'image/jpeg' },
+          }),
+        ),
+      )
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        await provider.downloadMedia('HTTPS://cdn.example.com/photo.jpg')
+
+        const calledUrl = String(fetchMock.mock.calls[0]?.[0] ?? '')
+        expect(calledUrl).toBe('https://cdn.example.com/photo.jpg')
+        expect(calledUrl).not.toContain('/HTTPS://')
+        expect(calledUrl).not.toContain('graph.facebook.com')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
     test('does not send the access token to untrusted hosts', async () => {
       const originalFetch = globalThis.fetch
       const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) =>
@@ -549,6 +574,60 @@ describe('CloudApiProvider', () => {
         await expect(
           provider.uploadMedia({ file: new Uint8Array([1, 2, 3]), mimeType: 'image/png' }),
         ).rejects.toThrow(MediaError)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('getMediaUrl parses file_size "0"', async () => {
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = mock(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              id: TEST_DATA.mediaId.media123,
+              url: 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1',
+              mime_type: 'image/jpeg',
+              sha256: 'abc',
+              file_size: '0',
+              messaging_product: 'whatsapp',
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        ),
+      ) as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        const result = await provider.getMediaUrl(TEST_DATA.mediaId.media123)
+        expect(result.fileSize).toBe(0)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('getMediaUrl parses numeric file_size 0', async () => {
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = mock(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              id: TEST_DATA.mediaId.media123,
+              url: 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1',
+              mime_type: 'image/jpeg',
+              sha256: 'abc',
+              file_size: 0,
+              messaging_product: 'whatsapp',
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        ),
+      ) as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        const result = await provider.getMediaUrl(TEST_DATA.mediaId.media123)
+        expect(result.fileSize).toBe(0)
       } finally {
         globalThis.fetch = originalFetch
       }

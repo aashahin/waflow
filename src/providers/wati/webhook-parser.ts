@@ -220,9 +220,10 @@ function detectEventType(payload: WatiWebhookPayload): string {
  */
 function parseWatiTimestamp(raw?: string): Date {
   if (!raw) return new Date(0)
-  // If the timestamp is all digits, treat as Unix epoch (seconds)
+  // Digit-only timestamps may be Unix seconds or milliseconds.
   if (/^\d+$/.test(raw)) {
-    return new Date(parseInt(raw, 10) * 1000)
+    const n = parseInt(raw, 10)
+    return new Date(n >= 1e12 ? n : n * 1000)
   }
   // Otherwise, try ISO string parsing
   const date = new Date(raw)

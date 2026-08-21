@@ -46,6 +46,8 @@ export interface RetryPolicy {
    * sends/creates set it false to avoid duplicate side effects.
    */
   idempotent: boolean
+  /** When aborted, stop immediately — do not wait out the backoff delay. */
+  signal?: AbortSignal
 }
 
 /**
@@ -91,9 +93,11 @@ export async function withRetry<T>(
   policy: RetryPolicy,
 ): Promise<T> {
   const canRetryAmbiguous = policy.idempotent || config.retryNonIdempotent
+  const signal = policy.signal
   let lastError: unknown
 
   for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
+    throwIfAborted(signal)
     try {
       return await fn()
     } catch (error) {
@@ -118,15 +122,49 @@ export async function withRetry<T>(
         errorMessage: error instanceof Error ? error.message : String(error),
       })
 
-      await sleep(delay)
+      throwIfAborted(signal)
+      await sleep(delay, signal)
     }
   }
 
   throw lastError
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw abortedError()
+  }
+}
+
+function abortedError(): NetworkError {
+  return new NetworkError({ message: 'Request aborted', retryable: false })
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortedError())
+      return
+    }
+
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(abortedError())
+    }
+
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    if (typeof timer === 'object' && timer !== null && 'unref' in timer) {
+      (timer as { unref: () => void }).unref()
+    }
+
+    if (!signal) return
+    signal.addEventListener('abort', onAbort, { once: true })
+    // Recheck after subscribe so an abort that raced the listener still rejects.
+    if (signal.aborted) onAbort()
+  })
 }
 
 function safeLog(logger: Logger, msg: string, meta?: Record<string, unknown>): void {

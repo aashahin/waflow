@@ -16,12 +16,48 @@ import { HttpClient } from '../../core/http.js'
 import { RateLimiter } from '../../core/rate-limiter.js'
 import { noopLogger, type Logger } from '../../core/logger.js'
 import { MediaError, ProviderError } from '../../core/errors.js'
+import { resolveHttpDownloadUrl } from '../../core/url-guard.js'
 import { mapOutboundToCloudApi } from '../cloud-api/mapper.js'
 import { parseCloudApiWebhook } from '../cloud-api/webhook-parser.js'
-import { getResponseBodyStream } from '../cloud-api/index.js'
+import { getResponseBodyStream, parseOptionalFileSize } from '../cloud-api/index.js'
 import { verifyHmacSha256 } from '../../utils/crypto.js'
 
 const DEFAULT_BASE_URL = 'https://waba-v2.360dialog.io'
+
+/** Meta media CDNs that 360dialog proxies on its own origin. */
+const META_MEDIA_CDN_HOSTS = new Set(['lookaside.fbsbx.com', 'fbsbx.com', 'fbcdn.net', 'facebook.com', 'whatsapp.net'])
+const META_MEDIA_CDN_SUFFIXES = ['.fbsbx.com', '.fbcdn.net', '.facebook.com', '.whatsapp.net'] as const
+
+function isMetaMediaCdnHost(hostname: string): boolean {
+  const host = hostname.toLowerCase()
+  if (host === 'graph.facebook.com' || host === 'graph.whatsapp.com') return false
+  if (META_MEDIA_CDN_HOSTS.has(host)) return true
+  return META_MEDIA_CDN_SUFFIXES.some(suffix => host.endsWith(suffix))
+}
+
+/**
+ * 360dialog serves Meta CDN attachments from its API origin, which is what
+ * keeps `D360-API-KEY` on the subsequent download (same origin as baseUrl).
+ */
+function rewriteDialog360MediaUrl(downloadUrl: string, apiBaseUrl: string): string {
+  let media: URL
+  try {
+    media = new URL(downloadUrl)
+  } catch {
+    return downloadUrl
+  }
+
+  if (!isMetaMediaCdnHost(media.hostname)) return downloadUrl
+
+  let api: URL
+  try {
+    api = new URL(apiBaseUrl)
+  } catch {
+    return downloadUrl
+  }
+
+  return `${api.origin}${media.pathname}${media.search}${media.hash}`
+}
 
 /** 360Dialog supports same features as Cloud API, minus webhook challenge */
 const SUPPORTED_FEATURES = new Set<ProviderFeature>([
@@ -167,10 +203,10 @@ export class Dialog360Provider implements WhatsAppProviderAdapter {
     }
 
     return {
-      url,
+      url: resolveHttpDownloadUrl(url) ?? url,
       mimeType: response.data?.mime_type,
       sha256: response.data?.sha256,
-      fileSize: response.data?.file_size ? parseInt(response.data.file_size, 10) : undefined,
+      fileSize: parseOptionalFileSize(response.data?.file_size),
     }
   }
 
@@ -178,13 +214,19 @@ export class Dialog360Provider implements WhatsAppProviderAdapter {
     let downloadUrl: string
     let expectedMimeType: string | undefined
 
-    if (mediaIdOrUrl.startsWith('http://') || mediaIdOrUrl.startsWith('https://')) {
-      downloadUrl = mediaIdOrUrl
+    const absoluteUrl = resolveHttpDownloadUrl(mediaIdOrUrl)
+    if (absoluteUrl) {
+      downloadUrl = absoluteUrl
     } else {
       const mediaInfo = await this.getMediaUrl(mediaIdOrUrl)
-      downloadUrl = mediaInfo.url
+      downloadUrl = resolveHttpDownloadUrl(mediaInfo.url) ?? mediaInfo.url
       expectedMimeType = mediaInfo.mimeType
     }
+
+    downloadUrl = rewriteDialog360MediaUrl(
+      downloadUrl,
+      this.config.baseUrl ?? DEFAULT_BASE_URL,
+    )
 
     const response = await this.http.rawRequest({
       method: 'GET',

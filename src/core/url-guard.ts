@@ -10,6 +10,60 @@ export function isAbsoluteUrl(path: string): boolean {
   return path.startsWith('http://') || path.startsWith('https://')
 }
 
+/**
+ * Treat a media-download input as an http(s) URL, folding scheme case
+ * (`HTTPS://…` → `https://…`). HttpClient only treats lowercase `http://` /
+ * `https://` as absolute; otherwise it would GET `/HTTPS://…` on the API base.
+ */
+export function resolveHttpDownloadUrl(mediaIdOrUrl: string): string | undefined {
+  const candidate = mediaIdOrUrl.trim()
+  try {
+    const parsed = new URL(candidate)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed.href
+    }
+  } catch {
+    // URL() is strict; a scheme-folded string may still be an absolute http URL
+  }
+  const schemeNormalized = candidate.replace(/^[A-Za-z][A-Za-z+\-.]*:/, scheme =>
+    scheme.toLowerCase(),
+  )
+  return isAbsoluteUrl(schemeNormalized) ? schemeNormalized : undefined
+}
+
+/** Combine caller + client abort signals. `undefined` if neither is set. */
+export function mergeAbortSignals(
+  ...signals: Array<AbortSignal | undefined>
+): AbortSignal | undefined {
+  const present: AbortSignal[] = []
+  for (const signal of signals) {
+    if (signal !== undefined && !present.includes(signal)) present.push(signal)
+  }
+  if (present.length === 0) return undefined
+  if (present.length === 1) return present[0]
+  if (typeof AbortSignal.any === 'function') {
+    return AbortSignal.any(present)
+  }
+  const alreadyAborted = present.find(signal => signal.aborted)
+  if (alreadyAborted) return alreadyAborted
+  const controller = new AbortController()
+  const onAbort = () => {
+    controller.abort(present.find(signal => signal.aborted)?.reason)
+  }
+  for (const signal of present) {
+    signal.addEventListener('abort', onAbort, { once: true })
+  }
+  return controller.signal
+}
+
+export function isSameOrigin(url: string, baseUrl: string): boolean {
+  try {
+    return new URL(url).origin === new URL(baseUrl).origin
+  } catch {
+    return false
+  }
+}
+
 function isGraphApiHost(host: string): boolean {
   return host === 'graph.facebook.com' || host === 'graph.whatsapp.com'
 }
@@ -29,11 +83,7 @@ export function isTrustedMediaHost(url: string, baseUrl: string, provider?: stri
 
   const host = parsed.hostname.toLowerCase()
 
-  try {
-    if (parsed.origin === new URL(baseUrl).origin && !isGraphApiHost(host)) return true
-  } catch {
-    // invalid base is not trusted by origin match
-  }
+  if (isSameOrigin(url, baseUrl) && !isGraphApiHost(host)) return true
 
   if (provider === '360dialog') {
     return hostMatches(host, D360_HOSTS, D360_SUFFIXES)
@@ -61,6 +111,7 @@ function isPrivateIpv4(host: string): boolean {
   if (octets.some(n => n > 255)) return false
   const [a, b] = octets as [number, number]
   if (a === 0 || a === 10 || a === 127) return true
+  if (a === 100 && b >= 64 && b <= 127) return true
   if (a === 169 && b === 254) return true
   if (a === 192 && b === 168) return true
   return a === 172 && b >= 16 && b <= 31
@@ -84,7 +135,9 @@ function parseIpv6Hextets(host: string): number[] | undefined {
     const octets = mixed[2].split('.').map(Number)
     if (octets.length !== 4 || octets.some(n => n > 255)) return undefined
     const [a, b, c, d] = octets as [number, number, number, number]
-    input = `${mixed[1]}:${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`
+    const tail = `${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`
+    // `::a.b.c.d` captures the prefix as `:` (last colon is the IPv4 separator)
+    input = mixed[1] === ':' ? `::${tail}` : `${mixed[1]}:${tail}`
   }
 
   let parts: string[]
@@ -105,21 +158,32 @@ function parseIpv6Hextets(host: string): number[] | undefined {
   return parts.map(p => parseInt(p, 16))
 }
 
-function ipv4FromMappedHextets(hextets: number[]): string | undefined {
-  if (
-    hextets.length !== 8
-    || hextets[0] !== 0
-    || hextets[1] !== 0
-    || hextets[2] !== 0
-    || hextets[3] !== 0
-    || hextets[4] !== 0
-    || hextets[5] !== 0xffff
-  ) {
-    return undefined
-  }
-  const hi = hextets[6] ?? 0
-  const lo = hextets[7] ?? 0
+function ipv4FromHextetPair(hi: number, lo: number): string {
   return `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`
+}
+
+function ipv4FromEmbeddedHextets(hextets: number[]): string | undefined {
+  if (hextets.length !== 8) return undefined
+  const h0 = hextets[0] ?? 0
+  const h1 = hextets[1] ?? 0
+  const h2 = hextets[2] ?? 0
+  const h3 = hextets[3] ?? 0
+  const h4 = hextets[4] ?? 0
+  const h5 = hextets[5] ?? 0
+  const h6 = hextets[6] ?? 0
+  const h7 = hextets[7] ?? 0
+
+  // IPv4-mapped (::ffff:x:x) and deprecated IPv4-compatible (::x:x / ::7f00:1)
+  if (h0 === 0 && h1 === 0 && h2 === 0 && h3 === 0 && h4 === 0 && (h5 === 0xffff || h5 === 0)) {
+    return ipv4FromHextetPair(h6, h7)
+  }
+  // 6to4 2002:<ipv4>::
+  if (h0 === 0x2002) return ipv4FromHextetPair(h1, h2)
+  // NAT64 well-known prefix 64:ff9b::/96
+  if (h0 === 0x64 && h1 === 0xff9b && h2 === 0 && h3 === 0 && h4 === 0 && h5 === 0) {
+    return ipv4FromHextetPair(h6, h7)
+  }
+  return undefined
 }
 
 function isIpv6LoopbackOrUnspecified(hextets: number[]): boolean {
@@ -165,8 +229,10 @@ export function isPrivateHostname(hostname: string): boolean {
     const hextets = parseIpv6Hextets(host)
     if (hextets) {
       if (isIpv6LoopbackOrUnspecified(hextets)) return true
-      const fromMapped = ipv4FromMappedHextets(hextets)
-      if (fromMapped) return isPrivateIpv4(fromMapped)
+      const prefix = hextets[0] ?? 0
+      if ((prefix & 0xffc0) === 0xfe80) return true
+      const embeddedIpv4 = ipv4FromEmbeddedHextets(hextets)
+      if (embeddedIpv4) return isPrivateIpv4(embeddedIpv4)
     }
 
     return host.startsWith('fe80:') || host.startsWith('fc') || host.startsWith('fd')

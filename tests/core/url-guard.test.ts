@@ -2,10 +2,24 @@ import { describe, test, expect } from 'bun:test'
 import {
   assertSafeFetchUrl,
   isPrivateHostname,
+  isSameOrigin,
   isTrustedMediaHost,
   makeRequestSignal,
+  resolveHttpDownloadUrl,
 } from '../../src/core/url-guard.js'
 import { ValidationError } from '../../src/core/errors.js'
+
+describe('resolveHttpDownloadUrl', () => {
+  test('folds uppercase HTTPS schemes', () => {
+    expect(resolveHttpDownloadUrl('HTTPS://lookaside.fbsbx.com/x')).toBe(
+      'https://lookaside.fbsbx.com/x',
+    )
+  })
+
+  test('returns undefined for media ids', () => {
+    expect(resolveHttpDownloadUrl('1234567890')).toBeUndefined()
+  })
+})
 
 describe('isTrustedMediaHost', () => {
   test('trusts same origin as the API base', () => {
@@ -118,6 +132,7 @@ describe('isPrivateHostname / assertSafeFetchUrl', () => {
     expect(isPrivateHostname('localhost')).toBe(true)
     expect(isPrivateHostname('::1')).toBe(true)
     expect(isPrivateHostname('::ffff:127.0.0.1')).toBe(true)
+    expect(isPrivateHostname('8.8.8.8')).toBe(false)
     expect(isPrivateHostname('lookaside.fbsbx.com')).toBe(false)
     expect(isPrivateHostname('fcbarcelona.com')).toBe(false)
   })
@@ -134,6 +149,32 @@ describe('isPrivateHostname / assertSafeFetchUrl', () => {
     expect(isPrivateHostname('0:0:0:0:0:ffff:7f00:1')).toBe(true)
     expect(isPrivateHostname('::ffff:a00:1')).toBe(true)
     expect(isPrivateHostname('::ffff:808:808')).toBe(false)
+  })
+
+  test('flags IPv4-compatible IPv6', () => {
+    expect(isPrivateHostname('::7f00:1')).toBe(true)
+    expect(isPrivateHostname('[::7f00:1]')).toBe(true)
+    expect(isPrivateHostname('::127.0.0.1')).toBe(true)
+    expect(isPrivateHostname('0:0:0:0:0:0:7f00:1')).toBe(true)
+    expect(isPrivateHostname('::808:808')).toBe(false)
+  })
+
+  test('flags 6to4 with a private embedded IPv4', () => {
+    expect(isPrivateHostname('2002:7f00:1::')).toBe(true)
+    expect(isPrivateHostname('2002:7f00:0001::')).toBe(true)
+    expect(isPrivateHostname('2002:808:808::')).toBe(false)
+  })
+
+  test('flags NAT64 well-known prefix with a private IPv4', () => {
+    expect(isPrivateHostname('64:ff9b::7f00:1')).toBe(true)
+    expect(isPrivateHostname('64:ff9b::808:808')).toBe(false)
+  })
+
+  test('flags CGNAT 100.64.0.0/10', () => {
+    expect(isPrivateHostname('100.64.0.1')).toBe(true)
+    expect(isPrivateHostname('100.127.255.255')).toBe(true)
+    expect(isPrivateHostname('100.63.255.255')).toBe(false)
+    expect(isPrivateHostname('100.128.0.1')).toBe(false)
   })
 
   test('flags decimal IPv4 hostnames', () => {
@@ -153,6 +194,9 @@ describe('isPrivateHostname / assertSafeFetchUrl', () => {
     expect(isPrivateHostname('svc.internal')).toBe(true)
     expect(isPrivateHostname('0.0.0.0')).toBe(true)
     expect(isPrivateHostname('fe80::1')).toBe(true)
+    expect(isPrivateHostname('fe90::1')).toBe(true)
+    expect(isPrivateHostname('febf::1')).toBe(true)
+    expect(isPrivateHostname('fec0::1')).toBe(false)
     expect(isPrivateHostname('fc00::1')).toBe(true)
     expect(isPrivateHostname('fd12:3456::1')).toBe(true)
     expect(isPrivateHostname('172.32.0.1')).toBe(false)
@@ -171,11 +215,31 @@ describe('isPrivateHostname / assertSafeFetchUrl', () => {
     expect(() => assertSafeFetchUrl('http://[::ffff:7f00:1]/latest', 'cloud-api')).toThrow(
       ValidationError,
     )
+    expect(() => assertSafeFetchUrl('http://[::127.0.0.1]/', 'cloud-api')).toThrow(
+      ValidationError,
+    )
+    expect(() => assertSafeFetchUrl('http://[2002:7f00:1::]/', 'cloud-api')).toThrow(
+      ValidationError,
+    )
+    expect(() => assertSafeFetchUrl('http://100.64.0.1/', 'cloud-api')).toThrow(
+      ValidationError,
+    )
   })
 
   test('refuses non-HTTP schemes and invalid URLs', () => {
     expect(() => assertSafeFetchUrl('file:///etc/passwd', 'cloud-api')).toThrow(ValidationError)
     expect(() => assertSafeFetchUrl('not a url', 'cloud-api')).toThrow(ValidationError)
+  })
+})
+
+describe('isSameOrigin', () => {
+  test('compares origins and returns false on parse failure', () => {
+    expect(isSameOrigin('https://example.com/a', 'https://example.com/b')).toBe(true)
+    expect(isSameOrigin('https://example.com:443/a', 'https://example.com/b')).toBe(true)
+    expect(isSameOrigin('https://example.com/a', 'https://other.example/a')).toBe(false)
+    expect(isSameOrigin('http://example.com/a', 'https://example.com/a')).toBe(false)
+    expect(isSameOrigin('not a url', 'https://example.com')).toBe(false)
+    expect(isSameOrigin('https://example.com', 'not a url')).toBe(false)
   })
 })
 

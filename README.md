@@ -115,7 +115,7 @@ await wa.message.markAsRead('wamid.abc123...')
 ### Interactive Messages
 
 ```typescript
-// Buttons (max 3)
+// Buttons (max 3; each title ≤ 20 characters)
 await wa.message.interactive.buttons(
   '+966501234567',
   'Would you like to confirm your order?',
@@ -129,7 +129,7 @@ await wa.message.interactive.buttons(
   },
 )
 
-// List (max 10 sections)
+// List (max 10 sections, ≤10 rows total; each row title ≤ 24 characters)
 await wa.message.interactive.list(
   '+966501234567',
   'Browse our menu:',
@@ -205,6 +205,21 @@ await wa.media.download('media-id-123', { timeout: 60_000, signal })
 await wa.media.delete('media-id-123')
 ```
 
+> **URL safety:** SSRF checks apply to **caller-supplied absolute URLs** (for
+> example `media.download('https://...')`), not to the configured API `baseUrl`
+> — so pointing `baseUrl` at `http://localhost` for mocks works. Rejected on
+> those caller URLs: private IPv4 (RFC1918, loopback, link-local, CGNAT
+> `100.64.0.0/10`), private IPv6 (loopback, link-local, unique-local), and IPv6
+> encodings of those IPv4 ranges (mapped, compatible, 6to4, NAT64). Public IPv6
+> is allowed. Redirect hops are re-checked the same way; an `https` API origin
+> never forwards credentials onto an `http` hop. Hostnames are not DNS-resolved,
+> so do not pass untrusted URLs to `media.download`.
+>
+> **360dialog downloads:** Meta `lookaside.fbsbx.com` (and other Meta CDN) URLs
+> are rewritten onto the configured `baseUrl` (default
+> `https://waba-v2.360dialog.io`) and authenticated with `D360-API-KEY`. waflow
+> does **not** fetch Meta CDNs with the 360dialog key.
+
 ### Webhooks
 
 ```typescript
@@ -273,6 +288,10 @@ new Elysia()
   })
   .listen(3000)
 ```
+
+HMAC SHA-256 signatures are compared **case-insensitively as hex** (with or
+without a `sha256=` prefix). `wa.webhook.verify()` returns a boolean and does
+**not** throw `WebhookVerificationError`.
 
 #### Webhook Verification (Hono / Cloudflare Workers)
 
@@ -359,6 +378,10 @@ const wa = createWhatsApp({
 })
 ```
 
+Media downloads that resolve to Meta `lookaside.fbsbx.com` (or other Meta CDNs)
+are rewritten to this `baseUrl` and sent with `D360-API-KEY`. Do not fetch Meta
+CDNs with the 360dialog key — waflow never does.
+
 ### Wati
 
 Completely different REST API surface. Supports text, templates, and media.
@@ -382,6 +405,9 @@ const wa = createWhatsApp({
 > ```typescript
 > await wa.message.image('+966501234567', { url: 'https://cdn.example/photo.png' })
 > ```
+>
+> A Wati send that is accepted (`result: true`) but includes **no message id**
+> throws `ProviderError` (breaking vs 0.6.0, which returned an empty `messageId`).
 
 ## Switch Providers
 
@@ -479,7 +505,9 @@ Retry policy is **idempotency-aware** to avoid duplicate delivery:
   rejected before processing, so there's no duplicate risk.
 - **Spam / pair-rate Graph codes (`#131048`, `#131056`)** are `ProviderError`
   and are **not** retried.
-- **Local queue-full** and **caller abort** are never retried.
+- **Local queue-full** and **caller abort** are never retried. Aborting
+  `ClientOptions.signal` (or a per-request `signal`) also **cancels retry
+  backoff sleep and the rate-limiter wait**.
 - **Network failures, timeouts, and `5xx`** are retried for *idempotent*
   operations (reads, deletes) but **not** for sends, template creation, or
   uploads. A timed-out OTP send is therefore **not** auto-retried, so users
@@ -513,6 +541,8 @@ Token bucket algorithm with FIFO fairness. When the bucket is empty, callers
 queue for the next token; the queue is **bounded** (overflow rejects with a
 `RateLimitError` instead of growing memory) and each waiter times out after
 `queueTimeoutMs` (so a request never hangs forever before its fetch starts).
+A caller abort unblocks waiters instead of leaving them queued until
+`queueTimeoutMs`.
 
 > ⚠️ **The limiter is per-client-instance and per-isolate — it is NOT
 > distributed.** It only smooths requests flowing through *one* client in *one*
@@ -580,6 +610,10 @@ const wa = createWhatsApp({
   },
 })
 ```
+
+> ⚠️ **`onRequest.body` may contain OTP codes and template parameters.** Do not
+> log raw request bodies in production. Stick to `url` / `method` (and maybe
+> byte length) for telemetry.
 
 ### Raw Response
 
@@ -695,7 +729,7 @@ waflow is designed edge-first. It uses only standard Web APIs:
 | `ReadableStream` | Stream-based media downloads |
 | `FormData` | Multipart media uploads |
 | `TextEncoder` | String → Uint8Array conversion |
-| `AbortSignal.timeout()` | Request timeouts |
+| `AbortController` + `setTimeout` (`makeRequestSignal`) | Request timeouts (unref'd; no `AbortSignal.timeout()`) |
 
 **Banned** (not used anywhere):
 - ❌ `node:crypto`

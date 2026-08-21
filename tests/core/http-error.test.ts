@@ -153,4 +153,60 @@ describe('throwForHttpError', () => {
       }),
     ).toThrow(ValidationError)
   })
+
+  test('HTTP 401 is AuthenticationError', () => {
+    expect(() =>
+      throwForHttpError({
+        status: 401,
+        method: 'GET',
+        path: '/media',
+        provider: 'cloud-api',
+        raw: { error: { message: 'Invalid OAuth access token' } },
+        retryAfterHeader: null,
+      }),
+    ).toThrow(AuthenticationError)
+  })
+
+  test('HTTP 403 + Graph 131047 is ProviderError, not AuthenticationError', () => {
+    try {
+      throwForHttpError({
+        status: 403,
+        method: 'POST',
+        path: '/messages',
+        provider: 'cloud-api',
+        raw: { error: { code: 131047, type: 'OAuthException', message: 'Re-engagement message' } },
+        retryAfterHeader: null,
+      })
+      throw new Error('expected throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderError)
+      expect(error).not.toBeInstanceOf(AuthenticationError)
+    }
+  })
+
+  test('HTTP 403 + Graph 190 is AuthenticationError', () => {
+    expect(() =>
+      throwForHttpError({
+        status: 403,
+        method: 'POST',
+        path: '/messages',
+        provider: 'cloud-api',
+        raw: { error: { code: 190, message: 'Access token has expired' } },
+        retryAfterHeader: null,
+      }),
+    ).toThrow(AuthenticationError)
+  })
+
+  test('HTTP 403 + OAuthException without an auth code is ProviderError', () => {
+    expect(() =>
+      throwForHttpError({
+        status: 403,
+        method: 'GET',
+        path: '/media',
+        provider: 'cloud-api',
+        raw: { error: { type: 'OAuthException', message: 'Permissions error' } },
+        retryAfterHeader: null,
+      }),
+    ).toThrow(ProviderError)
+  })
 })
