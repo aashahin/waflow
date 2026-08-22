@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/) (pre-1.0: breaking changes bump the minor).
 
-## Unreleased (0.7.0)
+## 0.7.0
 
 Download rewrite, abort, SSRF, webhook HMAC, classification hardening, and
 residual review (trailing-dot SSRF, mediaId allowlist, echo flag, timeouts,
