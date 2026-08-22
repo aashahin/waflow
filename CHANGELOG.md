@@ -5,9 +5,10 @@ All notable changes to this project are documented here. This project adheres to
 
 ## 0.7.0
 
-Download rewrite, abort, SSRF, webhook HMAC, classification hardening, and
+Download rewrite, abort, SSRF, webhook HMAC, classification hardening,
 residual review (trailing-dot SSRF, mediaId allowlist, echo flag, timeouts,
-trusted-host narrowing, Wati template params, log query redaction).
+trusted-host narrowing, Wati template params, log query redaction), and
+TypeScript 7.
 
 ### Breaking
 
@@ -98,6 +99,12 @@ trusted-host narrowing, Wati template params, log query redaction).
 - `ProviderName` still autocompletes `'cloud-api' | '360dialog' | 'wati'` and
   also accepts custom adapter names (`string & {}`). `SendResult.provider`
   follows.
+
+### Tooling
+
+- **TypeScript 7** for typecheck and declaration emit. `tsup` still bundles JS;
+  `.d.ts` files are emitted by `tsc` because tsup's `rollup-plugin-dts` requires
+  the TypeScript 6 compiler API, which TS 7 does not ship.
 
 ## 0.6.0
 
