@@ -1,6 +1,6 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test'
 import { CloudApiProvider } from '../../../src/providers/cloud-api/index.js'
-import { MediaError, ProviderError, ValidationError } from '../../../src/core/errors.js'
+import { MediaError, ProviderError, TimeoutError, ValidationError } from '../../../src/core/errors.js'
 import type { CloudApiConfig, ClientOptions } from '../../../src/types/config.js'
 
 // ---------------------------------------------------------------------------
@@ -285,8 +285,71 @@ describe('CloudApiProvider', () => {
 
         const calledUrl = fetchMock.mock.calls[0]?.[0] as string
         expect(calledUrl).toContain('/waba-789/message_templates')
+        expect(calledUrl).toContain('fields=')
+        expect(calledUrl).toContain('limit=')
         // Should NOT contain phoneNumberId
         expect(calledUrl).not.toContain(TEST_DATA.config.cloudApi.phoneNumberId)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('listTemplates passes fields and limit on every page', async () => {
+      const originalFetch = globalThis.fetch
+      let page = 0
+      const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) => {
+        page++
+        if (page === 1) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                data: [{
+                  id: 'tmpl-1',
+                  name: 'hello',
+                  language: 'en_US',
+                  status: 'APPROVED',
+                  category: 'UTILITY',
+                  components: [],
+                }],
+                paging: {
+                  cursors: { after: 'cursor-1' },
+                  next: 'https://graph.facebook.com/v25.0/next',
+                },
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            ),
+          )
+        }
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              data: [{
+                id: 'tmpl-2',
+                name: 'bye',
+                language: 'en_US',
+                status: 'APPROVED',
+                category: 'UTILITY',
+                components: [],
+              }],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        )
+      })
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider({ wabaId: 'waba-789' })
+        const templates = await provider.listTemplates()
+
+        expect(templates).toHaveLength(2)
+        expect(fetchMock.mock.calls).toHaveLength(2)
+        for (const call of fetchMock.mock.calls) {
+          const url = String(call[0] ?? '')
+          expect(url).toContain('fields=')
+          expect(url).toContain('limit=')
+        }
+        expect(String(fetchMock.mock.calls[1]?.[0] ?? '')).toContain('after=cursor-1')
       } finally {
         globalThis.fetch = originalFetch
       }
@@ -535,6 +598,27 @@ describe('CloudApiProvider', () => {
       await expect(provider.downloadMedia('http://127.0.0.1/latest')).rejects.toBeInstanceOf(ValidationError)
     })
 
+    test('treats non-numeric content-length as undefined', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) =>
+        Promise.resolve(
+          new Response('ok', {
+            status: 200,
+            headers: { 'content-type': 'image/jpeg', 'content-length': 'abc' },
+          }),
+        ),
+      )
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        const result = await provider.downloadMedia('https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1')
+        expect(result.contentLength).toBeUndefined()
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
     test('defaults to no download timeout so a slow body is not aborted', async () => {
       const originalFetch = globalThis.fetch
       const fetchMock = mock(async (_url: string | URL | Request, init?: RequestInit) => {
@@ -560,6 +644,92 @@ describe('CloudApiProvider', () => {
   })
 
   describe('media upload and url', () => {
+    test('getMediaUrl rejects path-traversal media IDs without fetching', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock(() =>
+        Promise.resolve(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })),
+      )
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        await expect(provider.getMediaUrl('../v19.0/me')).rejects.toBeInstanceOf(ValidationError)
+        expect(fetchMock).not.toHaveBeenCalled()
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('deleteMedia rejects query-string media IDs without fetching', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock(() =>
+        Promise.resolve(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })),
+      )
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        await expect(provider.deleteMedia('123?x=1')).rejects.toBeInstanceOf(ValidationError)
+        expect(fetchMock).not.toHaveBeenCalled()
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('uploadMedia default timeout outlives the JSON client timeout', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock(async () => {
+        await new Promise(r => setTimeout(r, 80))
+        return new Response(JSON.stringify({ id: 'media-1' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      })
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider(undefined, { timeout: 25 })
+        const result = await provider.uploadMedia({
+          file: new Uint8Array([1, 2, 3]),
+          mimeType: 'image/png',
+        })
+        expect(result.id).toBe('media-1')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('uploadMedia honors params.timeout', async () => {
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = mock((_url: string | URL | Request, init?: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          const fail = () => {
+            const err = new Error('aborted')
+            err.name = 'AbortError'
+            reject(err)
+          }
+          if (init?.signal?.aborted) {
+            fail()
+            return
+          }
+          init?.signal?.addEventListener('abort', fail, { once: true })
+        }),
+      ) as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        await expect(
+          provider.uploadMedia({
+            file: new Uint8Array([1, 2, 3]),
+            mimeType: 'image/png',
+            timeout: 30,
+          }),
+        ).rejects.toBeInstanceOf(TimeoutError)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
     test('uploadMedia throws MediaError when provider returns empty body', async () => {
       const originalFetch = globalThis.fetch
       globalThis.fetch = mock(() =>

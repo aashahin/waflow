@@ -129,6 +129,12 @@ export function mapOutboundToCloudApi(
       }
 
     case 'interactive.button':
+      if (message.body.length < 1 || message.body.length > 1024) {
+        throw new ValidationError({
+          message: `Interactive buttons: body must be 1-1024 characters (got ${message.body.length})`,
+          provider,
+        })
+      }
       if (message.buttons.length === 0) {
         throw new ValidationError({
           message: 'Interactive buttons: at least 1 button is required',
@@ -145,6 +151,12 @@ export function mapOutboundToCloudApi(
         if (button.title.length > 20) {
           throw new ValidationError({
             message: `Interactive buttons: title exceeds 20 characters (got ${button.title.length})`,
+            provider,
+          })
+        }
+        if (button.id.length < 1 || button.id.length > 256) {
+          throw new ValidationError({
+            message: `Interactive buttons: id must be 1-256 characters (got ${button.id.length})`,
             provider,
           })
         }
@@ -167,9 +179,21 @@ export function mapOutboundToCloudApi(
       }
 
     case 'interactive.list': {
+      if (message.body.length < 1 || message.body.length > 1024) {
+        throw new ValidationError({
+          message: `Interactive list: body must be 1-1024 characters (got ${message.body.length})`,
+          provider,
+        })
+      }
       if (message.buttonText.length > 20) {
         throw new ValidationError({
           message: `Interactive list: button text exceeds 20 characters (got ${message.buttonText.length})`,
+          provider,
+        })
+      }
+      if (message.sections.length === 0) {
+        throw new ValidationError({
+          message: 'Interactive list: at least 1 section is required',
           provider,
         })
       }
@@ -181,6 +205,12 @@ export function mapOutboundToCloudApi(
       }
       // WhatsApp's real binding limit is ≤ 10 rows TOTAL across all sections.
       const totalRows = message.sections.reduce((sum, section) => sum + section.rows.length, 0)
+      if (totalRows === 0) {
+        throw new ValidationError({
+          message: 'Interactive list: at least 1 row is required',
+          provider,
+        })
+      }
       if (totalRows > 10) {
         throw new ValidationError({
           message: `Interactive list: maximum 10 rows total across all sections, got ${totalRows}`,
@@ -198,6 +228,12 @@ export function mapOutboundToCloudApi(
           if (row.title.length > 24) {
             throw new ValidationError({
               message: `Interactive list: row title exceeds 24 characters (got ${row.title.length})`,
+              provider,
+            })
+          }
+          if (row.description !== undefined && row.description.length > 72) {
+            throw new ValidationError({
+              message: `Interactive list: row description exceeds 72 characters (got ${row.description.length})`,
               provider,
             })
           }

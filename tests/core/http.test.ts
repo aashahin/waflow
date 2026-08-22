@@ -111,6 +111,81 @@ describe('HttpClient doFetch', () => {
     )
   })
 
+  test.each(['AbortError', 'TimeoutError'] as const)(
+    '%s with timeout 0 is NetworkError not TimeoutError',
+    async (errorName) => {
+      const client = makeClient({ timeout: 0 })
+      await withFetch(
+        async () => {
+          const err = new Error('aborted')
+          err.name = errorName
+          throw err
+        },
+        async () => {
+          try {
+            await client.request({ method: 'GET', path: '/me', timeout: 0 })
+            throw new Error('expected throw')
+          } catch (error) {
+            expect(error).toBeInstanceOf(NetworkError)
+            expect(error).not.toBeInstanceOf(TimeoutError)
+            expect((error as NetworkError).retryable).toBe(false)
+          }
+        },
+      )
+    },
+  )
+
+  test('hung JSON body is aborted by the request timeout', async () => {
+    const client = makeClient({ timeout: 40 })
+    await withFetch(
+      async (_url, init) => {
+        const signal = init?.signal
+        const body = new ReadableStream({
+          start(controller) {
+            const onAbort = () => {
+              const reason = signal?.reason
+              const err = reason instanceof Error
+                ? reason
+                : Object.assign(new Error('aborted'), { name: 'AbortError' })
+              try {
+                controller.error(err)
+              } catch {}
+            }
+            if (signal?.aborted) {
+              onAbort()
+              return
+            }
+            signal?.addEventListener('abort', onAbort, { once: true })
+          },
+        })
+        return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } })
+      },
+      async () => {
+        await expect(client.request({ method: 'GET', path: '/me' })).rejects.toBeInstanceOf(
+          TimeoutError,
+        )
+      },
+    )
+  })
+
+  test('rawRequest timeout is TTFB-only and does not abort the body', async () => {
+    const client = makeClient()
+    let fetchSignal: AbortSignal | undefined
+    await withFetch(
+      async (_url, init) => {
+        fetchSignal = init?.signal
+        return new Response('ok', { status: 200 })
+      },
+      async () => {
+        const res = await client.rawRequest({ method: 'GET', path: '/me', timeout: 30 })
+        expect(res.status).toBe(200)
+        expect(fetchSignal?.aborted).toBe(false)
+        await new Promise(r => setTimeout(r, 80))
+        expect(fetchSignal?.aborted).toBe(false)
+      },
+    )
+  })
+
   test('timeout 0 does not abort the request', async () => {
     const client = makeClient({ timeout: 0 })
     await withFetch(
@@ -510,6 +585,70 @@ describe('HttpClient headersForUrl', () => {
 })
 
 describe('HttpClient logger isolation', () => {
+  test('debug logs omit URL query and hash', async () => {
+    const messages: string[] = []
+    const hookUrls: string[] = []
+    const logger: Logger = {
+      debug(msg) { messages.push(msg) },
+      info() {},
+      warn() {},
+      error() {},
+    }
+    const client = makeClient({
+      logger,
+      hooks: {
+        onRequest({ url }) { hookUrls.push(url) },
+      },
+    })
+    await withFetch(
+      async () => new Response('{}', { status: 200 }),
+      async () => {
+        await client.request({
+          method: 'GET',
+          path: '/me',
+          query: { access_token: 'secret-token', foo: 'bar' },
+        })
+      },
+    )
+    expect(messages.length).toBeGreaterThan(0)
+    for (const msg of messages) {
+      expect(msg).not.toContain('access_token')
+      expect(msg).not.toContain('secret-token')
+      expect(msg).not.toContain('foo=bar')
+      expect(msg).not.toContain('?')
+      expect(msg).not.toContain('#')
+      expect(msg).toContain('https://graph.facebook.com/v25.0/me')
+    }
+    expect(hookUrls.some(u => u.includes('access_token=secret-token'))).toBe(true)
+  })
+
+  test('debug logs omit hash on absolute URLs', async () => {
+    const messages: string[] = []
+    const logger: Logger = {
+      debug(msg) { messages.push(msg) },
+      info() {},
+      warn() {},
+      error() {},
+    }
+    const client = makeClient({ logger })
+    await withFetch(
+      async () => new Response('{}', { status: 200 }),
+      async () => {
+        await client.request({
+          method: 'GET',
+          path: 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=secret#frag',
+        })
+      },
+    )
+    expect(messages.length).toBeGreaterThan(0)
+    for (const msg of messages) {
+      expect(msg).not.toContain('mid=secret')
+      expect(msg).not.toContain('#frag')
+      expect(msg).not.toContain('?')
+      expect(msg).toContain('https://lookaside.fbsbx.com/whatsapp_business/attachments/')
+    }
+  })
+
   test('logger throws do not fail the request', async () => {
     const logger: Logger = {
       debug() { throw new Error('debug') },

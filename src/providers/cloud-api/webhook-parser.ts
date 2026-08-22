@@ -60,6 +60,7 @@ export function parseCloudApiWebhook(
       }
 
       const metadata = buildMetadata(value, raw, providerName)
+      const echo = field === 'smb_message_echoes' || field === 'message_echoes'
 
       if (Array.isArray(value.messages)) {
         const contactsByWaId = new Map<string, { name: string; waId: string }>()
@@ -82,6 +83,7 @@ export function parseCloudApiWebhook(
             message: parseIncomingMessage(typed),
             contact: contactsByWaId.get(typed.from),
             context: parseMessageContext(typed),
+            ...(echo ? { echo: true } : {}),
             metadata,
           })
         }

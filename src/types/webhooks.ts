@@ -32,6 +32,8 @@ export interface IncomingMessageEvent {
   contact?: { name: string; waId: string }
   /** Quoted / replied-to message, when the provider includes it */
   context?: { messageId: string; from?: string }
+  /** True for history echoes (`smb_message_echoes` / `message_echoes`); omitted on inbound messages */
+  echo?: boolean
   /** Provider metadata */
   metadata: WebhookMetadata
 }

@@ -1,6 +1,6 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test'
 import { Dialog360Provider } from '../../../src/providers/360dialog/index.js'
-import { MediaError, ValidationError } from '../../../src/core/errors.js'
+import { MediaError, TimeoutError, ValidationError } from '../../../src/core/errors.js'
 import type { Dialog360Config, ClientOptions } from '../../../src/types/config.js'
 import type { WhatsAppProviderAdapter } from '../../../src/types/provider.js'
 
@@ -221,6 +221,60 @@ describe('Dialog360Provider', () => {
       expect(provider.name).toBe('360dialog')
     })
 
+    test('uploadMedia default timeout outlives the JSON client timeout', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock(async () => {
+        await new Promise(r => setTimeout(r, 80))
+        return new Response(JSON.stringify({ id: 'media-1' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      })
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider(undefined, { timeout: 25 })
+        const result = await provider.uploadMedia({
+          file: new Uint8Array([1, 2, 3]),
+          mimeType: 'image/png',
+        })
+        expect(result.id).toBe('media-1')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('uploadMedia honors params.timeout', async () => {
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = mock((_url: string | URL | Request, init?: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          const fail = () => {
+            const err = new Error('aborted')
+            err.name = 'AbortError'
+            reject(err)
+          }
+          if (init?.signal?.aborted) {
+            fail()
+            return
+          }
+          init?.signal?.addEventListener('abort', fail, { once: true })
+        }),
+      ) as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        await expect(
+          provider.uploadMedia({
+            file: new Uint8Array([1, 2, 3]),
+            mimeType: 'image/png',
+            timeout: 30,
+          }),
+        ).rejects.toBeInstanceOf(TimeoutError)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
     test('uploadMedia throws MediaError when provider returns empty body', async () => {
       const originalFetch = globalThis.fetch
       globalThis.fetch = mock(() =>
@@ -252,6 +306,38 @@ describe('Dialog360Provider', () => {
       try {
         const provider = createProvider()
         await expect(provider.getMediaUrl(TEST_DATA.mediaId.media123)).rejects.toThrow(MediaError)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('getMediaUrl throws ValidationError for a path-traversal media ID', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock(() =>
+        Promise.resolve(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })),
+      )
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        await expect(provider.getMediaUrl('../x')).rejects.toBeInstanceOf(ValidationError)
+        expect(fetchMock.mock.calls).toHaveLength(0)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('deleteMedia throws ValidationError for a path-traversal media ID', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock(() =>
+        Promise.resolve(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })),
+      )
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        await expect(provider.deleteMedia('../x')).rejects.toBeInstanceOf(ValidationError)
+        expect(fetchMock.mock.calls).toHaveLength(0)
       } finally {
         globalThis.fetch = originalFetch
       }
@@ -312,6 +398,32 @@ describe('Dialog360Provider', () => {
         )
         const headers = (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.headers as Record<string, string>
         expect(headers['D360-API-KEY']).toBe(TEST_DATA.config.dialog360.apiKey)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('rewrites lookaside URLs onto a path-prefixed 360dialog baseUrl', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) =>
+        Promise.resolve(
+          new Response('ok', {
+            status: 200,
+            headers: { 'content-type': 'image/jpeg' },
+          }),
+        ),
+      )
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider({ baseUrl: 'https://proxy.example/360' })
+        await provider.downloadMedia(
+          'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1',
+        )
+
+        expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+          'https://proxy.example/360/whatsapp_business/attachments/?mid=1',
+        )
       } finally {
         globalThis.fetch = originalFetch
       }
@@ -388,6 +500,31 @@ describe('Dialog360Provider', () => {
       }
     })
 
+    test('does not rewrite non-attachment Meta CDN paths onto the 360dialog origin', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) =>
+        Promise.resolve(
+          new Response('ok', {
+            status: 200,
+            headers: { 'content-type': 'image/jpeg' },
+          }),
+        ),
+      )
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        await provider.downloadMedia('https://lookaside.fbsbx.com/not-media/secret')
+
+        expect(fetchMock.mock.calls[0]?.[0]).toBe('https://lookaside.fbsbx.com/not-media/secret')
+        expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('waba-v2.360dialog.io')
+        const headers = (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.headers as Record<string, string>
+        expect(headers['D360-API-KEY']).toBeUndefined()
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
     test('does not send D360-API-KEY to untrusted hosts', async () => {
       const originalFetch = globalThis.fetch
       const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) =>
@@ -415,6 +552,48 @@ describe('Dialog360Provider', () => {
     test('refuses private download URLs', async () => {
       const provider = createProvider()
       await expect(provider.downloadMedia('http://127.0.0.1/latest')).rejects.toBeInstanceOf(ValidationError)
+    })
+
+    test('downloadMedia parses a finite content-length header', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) =>
+        Promise.resolve(
+          new Response('ok', {
+            status: 200,
+            headers: { 'content-type': 'image/jpeg', 'content-length': '42' },
+          }),
+        ),
+      )
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        const result = await provider.downloadMedia('https://waba-v2.360dialog.io/media/1')
+        expect(result.contentLength).toBe(42)
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('downloadMedia omits contentLength when the header is not a finite number', async () => {
+      const originalFetch = globalThis.fetch
+      const fetchMock = mock((_url: string | URL | Request, _init?: RequestInit) =>
+        Promise.resolve(
+          new Response('ok', {
+            status: 200,
+            headers: { 'content-type': 'image/jpeg', 'content-length': 'not-a-number' },
+          }),
+        ),
+      )
+      globalThis.fetch = fetchMock as unknown as typeof fetch
+
+      try {
+        const provider = createProvider()
+        const result = await provider.downloadMedia('https://waba-v2.360dialog.io/media/1')
+        expect(result.contentLength).toBeUndefined()
+      } finally {
+        globalThis.fetch = originalFetch
+      }
     })
 
     test('defaults to no download timeout so a slow body is not aborted', async () => {

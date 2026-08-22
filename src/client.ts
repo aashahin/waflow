@@ -21,7 +21,6 @@ import type {
   ButtonDef,
   SectionDef,
   TemplateComponent,
-  InteractiveHeader,
   OtpSendOptions,
 } from './types/messages.js'
 import type { MediaUpload, MediaUploadResult, MediaUrlResult, MediaDownloadResult, MediaDownloadOptions } from './types/media.js'
@@ -361,7 +360,9 @@ class OtpNamespace {
     const components: TemplateComponent[] = [
       { type: 'body', parameters: [{ type: 'text', text: trimmed }] },
     ]
-    if (options.button !== false) {
+    // Wati auth templates have no button component; attaching one throws
+    // UnsupportedFeatureError after template-param hardening.
+    if (options.button !== false && this.adapter.name !== 'wati') {
       // Auth templates carry the code again in the URL/copy-code button.
       components.push({
         type: 'button',

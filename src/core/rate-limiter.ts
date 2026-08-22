@@ -99,7 +99,7 @@ export class RateLimiter {
    *   (bounds memory under sustained overload).
    * - Rejects with a `TimeoutError` if it waits longer than `queueTimeoutMs`,
    *   so a request never hangs forever before its fetch even starts.
-   * - Rejects with a `TimeoutError` (`retryable: false`) if `signal` is aborted
+   * - Rejects with a `NetworkError` (`retryable: false`) if `signal` is aborted
    *   before a token is granted — including when it was already aborted.
    */
   async acquire(signal?: AbortSignal): Promise<void> {

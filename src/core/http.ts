@@ -7,10 +7,10 @@ import type { ProviderName } from '../types/common.js'
 import type { Logger } from './logger.js'
 import type { RateLimiter } from './rate-limiter.js'
 import type { RetryConfig } from '../types/config.js'
-import { NetworkError, ProviderError, TimeoutError } from './errors.js'
+import { NetworkError, ProviderError, TimeoutError, WhatsAppError } from './errors.js'
 import { throwForHttpError } from './http-error.js'
 import { resolveRetryConfig, withRetry } from './retry.js'
-import { assertSafeFetchUrl, isAbsoluteUrl, isSameOrigin, isTrustedMediaHost, makeRequestSignal, mergeAbortSignals } from './url-guard.js'
+import { assertSafeFetchUrl, bindAbortSignals, isAbsoluteUrl, isSameOrigin, isTrustedMediaHost, makeRequestSignal } from './url-guard.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -68,6 +68,23 @@ export interface HttpResponse<T = unknown> {
   headers: Headers
 }
 
+/** Origin + pathname only so debug logs never include query/hash tokens. */
+function redactUrlForLog(url: string): string {
+  try {
+    const parsed = new URL(url)
+    return `${parsed.origin}${parsed.pathname}`
+  } catch {
+    const q = url.indexOf('?')
+    return q === -1 ? url : url.slice(0, q)
+  }
+}
+
+function abortReasonName(error: unknown, signal?: AbortSignal): string {
+  if (error instanceof Error && error.cause instanceof Error) return error.cause.name
+  const reason = signal?.reason
+  return reason instanceof Error ? reason.name : ''
+}
+
 // ---------------------------------------------------------------------------
 // Implementation
 // ---------------------------------------------------------------------------
@@ -86,102 +103,150 @@ export class HttpClient {
    * error classification.
    */
   async request<T = unknown>(opts: RequestOptions): Promise<HttpResponse<T>> {
-    const signal = mergeAbortSignals(opts.signal, this.config.signal)
-    const execute = async (): Promise<HttpResponse<T>> => {
-      await this.config.rateLimiter.acquire(signal)
+    const { signal, cleanup } = bindAbortSignals([opts.signal, this.config.signal])
+    try {
+      const execute = async (): Promise<HttpResponse<T>> => {
+        await this.config.rateLimiter.acquire(signal)
 
-      const url = this.buildUrl(opts.path, opts.query)
-      const timeout = opts.timeout ?? this.config.timeout
-      const headers: Record<string, string> = {
-        ...this.config.defaultHeaders,
-        ...opts.headers,
+        const url = this.buildUrl(opts.path, opts.query)
+        const timeout = opts.timeout ?? this.config.timeout
+        const headers: Record<string, string> = {
+          ...this.config.defaultHeaders,
+          ...opts.headers,
+        }
+
+        // Only set Content-Type for JSON bodies
+        if (opts.body !== undefined && !headers['Content-Type']) {
+          headers['Content-Type'] = 'application/json'
+        }
+
+        const startTime = Date.now()
+
+        this.safeHook('onRequest', { url, method: opts.method, body: opts.body })
+
+        this.log('debug', `${opts.method} ${redactUrlForLog(url)}`)
+
+        const { response, cleanup: releaseTimeout } = await this.doFetch(url, {
+          method: opts.method,
+          headers,
+          headerUrl: opts.path,
+          body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+          timeout,
+          signal,
+        })
+
+        try {
+          const durationMs = Date.now() - startTime
+
+          this.safeHook('onResponse', { url, status: response.status, durationMs })
+
+          if (!response.ok) {
+            await this.handleErrorResponse(response, opts)
+          }
+
+          const data = await this.parseJsonBody<T>(response, opts)
+
+          this.log('debug', `${opts.method} ${redactUrlForLog(url)} → ${response.status} (${durationMs}ms)`)
+
+          return {
+            status: response.status,
+            data,
+            headers: response.headers,
+          }
+        } catch (error) {
+          return this.classifyFetchFailure(error, {
+            method: opts.method,
+            url,
+            timeout,
+            userSignal: signal,
+          })
+        } finally {
+          releaseTimeout()
+        }
       }
 
-      // Only set Content-Type for JSON bodies
-      if (opts.body !== undefined && !headers['Content-Type']) {
-        headers['Content-Type'] = 'application/json'
-      }
-
-      const startTime = Date.now()
-
-      this.safeHook('onRequest', { url, method: opts.method, body: opts.body })
-
-      this.log('debug', `${opts.method} ${url}`)
-
-      const response = await this.doFetch(url, {
-        method: opts.method,
-        headers,
-        headerUrl: opts.path,
-        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-        timeout,
-        signal,
-      })
-
-      const durationMs = Date.now() - startTime
-
-      this.safeHook('onResponse', { url, status: response.status, durationMs })
-
-      if (!response.ok) {
-        await this.handleErrorResponse(response, opts)
-      }
-
-      const data = await this.parseJsonBody<T>(response, opts)
-
-      this.log('debug', `${opts.method} ${url} → ${response.status} (${durationMs}ms)`)
-
-      return {
-        status: response.status,
-        data,
-        headers: response.headers,
-      }
+      return await this.run(execute, opts.method, opts.skipRetry, opts.idempotent, signal)
+    } finally {
+      cleanup()
     }
-
-    return this.run(execute, opts.method, opts.skipRetry, opts.idempotent, signal)
   }
 
   /**
    * Make a raw fetch request (for media downloads that return streams).
    * Returns the raw Response so the caller can access .body as a stream.
    * Supports retry for transient failures.
+   *
+   * The request timeout applies until headers arrive (TTFB). It is then
+   * released so a streaming download body is not aborted.
    */
   async rawRequest(opts: RequestOptions): Promise<Response> {
-    const signal = mergeAbortSignals(opts.signal, this.config.signal)
-    const execute = async (): Promise<Response> => {
-      await this.config.rateLimiter.acquire(signal)
+    const { signal, cleanup } = bindAbortSignals([opts.signal, this.config.signal])
+    // On success the body stream outlives this stack frame. Dropping polyfill
+    // abort listeners here would detach ClientOptions.signal / per-call abort
+    // from the download on Node 18 (no AbortSignal.any).
+    let detachAbort = cleanup
+    try {
+      const execute = async (): Promise<Response> => {
+        await this.config.rateLimiter.acquire(signal)
 
-      const url = this.buildUrl(opts.path, opts.query)
-      const timeout = opts.timeout ?? this.config.timeout
-      const headers: Record<string, string> = {
-        ...this.config.defaultHeaders,
-        ...opts.headers,
+        const url = this.buildUrl(opts.path, opts.query)
+        const timeout = opts.timeout ?? this.config.timeout
+        const headers: Record<string, string> = {
+          ...this.config.defaultHeaders,
+          ...opts.headers,
+        }
+
+        const startTime = Date.now()
+        this.safeHook('onRequest', { url, method: opts.method, body: opts.body })
+
+        const { response, cleanup: releaseTimeout } = await this.doFetch(url, {
+          method: opts.method,
+          headers,
+          headerUrl: opts.path,
+          body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+          timeout,
+          signal,
+        })
+
+        try {
+          this.safeHook('onResponse', {
+            url,
+            status: response.status,
+            durationMs: Date.now() - startTime,
+          })
+
+          if (!response.ok) {
+            try {
+              await this.handleErrorResponse(response, opts)
+            } catch (error) {
+              this.classifyFetchFailure(error, {
+                method: opts.method,
+                url,
+                timeout,
+                userSignal: signal,
+              })
+            }
+          }
+
+          detachAbort = () => {}
+          return response
+        } catch (error) {
+          return this.classifyFetchFailure(error, {
+            method: opts.method,
+            url,
+            timeout,
+            userSignal: signal,
+          })
+        } finally {
+          // Error-body reads stay under the TTFB timeout; 2xx streams do not.
+          releaseTimeout()
+        }
       }
 
-      const startTime = Date.now()
-      this.safeHook('onRequest', { url, method: opts.method, body: opts.body })
-
-      const response = await this.doFetch(url, {
-        method: opts.method,
-        headers,
-        headerUrl: opts.path,
-        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-        timeout,
-        signal,
-      })
-
-      this.safeHook('onResponse', {
-        url,
-        status: response.status,
-        durationMs: Date.now() - startTime,
-      })
-
-      if (!response.ok) {
-        await this.handleErrorResponse(response, opts)
-      }
-
-      return response
+      return await this.run(execute, opts.method, opts.skipRetry, opts.idempotent, signal)
+    } finally {
+      detachAbort()
     }
-
-    return this.run(execute, opts.method, opts.skipRetry, opts.idempotent, signal)
   }
 
   /**
@@ -201,45 +266,60 @@ export class HttpClient {
       signal?: AbortSignal
     },
   ): Promise<HttpResponse<T>> {
-    const signal = mergeAbortSignals(options?.signal, this.config.signal)
-    const execute = async (): Promise<HttpResponse<T>> => {
-      await this.config.rateLimiter.acquire(signal)
+    const { signal, cleanup } = bindAbortSignals([options?.signal, this.config.signal])
+    try {
+      const execute = async (): Promise<HttpResponse<T>> => {
+        await this.config.rateLimiter.acquire(signal)
 
-      const url = this.buildUrl(path)
-      const timeout = options?.timeout ?? this.config.timeout
-      const headers: Record<string, string> = {
-        ...this.config.defaultHeaders,
-        ...options?.extraHeaders,
+        const url = this.buildUrl(path)
+        const timeout = options?.timeout ?? this.config.timeout
+        const headers: Record<string, string> = {
+          ...this.config.defaultHeaders,
+          ...options?.extraHeaders,
+        }
+
+        const startTime = Date.now()
+        this.safeHook('onRequest', { url, method: 'POST' })
+
+        const { response, cleanup: releaseTimeout } = await this.doFetch(url, {
+          method: 'POST',
+          headers,
+          headerUrl: path,
+          body: formData,
+          timeout,
+          signal,
+        })
+
+        try {
+          this.safeHook('onResponse', {
+            url,
+            status: response.status,
+            durationMs: Date.now() - startTime,
+          })
+
+          if (!response.ok) {
+            await this.handleErrorResponse(response, { method: 'POST', path })
+          }
+
+          const data = await this.parseJsonBody<T>(response, { method: 'POST', path })
+
+          return { status: response.status, data, headers: response.headers }
+        } catch (error) {
+          return this.classifyFetchFailure(error, {
+            method: 'POST',
+            url,
+            timeout,
+            userSignal: signal,
+          })
+        } finally {
+          releaseTimeout()
+        }
       }
 
-      const startTime = Date.now()
-      this.safeHook('onRequest', { url, method: 'POST' })
-
-      const response = await this.doFetch(url, {
-        method: 'POST',
-        headers,
-        headerUrl: path,
-        body: formData,
-        timeout,
-        signal,
-      })
-
-      this.safeHook('onResponse', {
-        url,
-        status: response.status,
-        durationMs: Date.now() - startTime,
-      })
-
-      if (!response.ok) {
-        await this.handleErrorResponse(response, { method: 'POST', path })
-      }
-
-      const data = await this.parseJsonBody<T>(response, { method: 'POST', path })
-
-      return { status: response.status, data, headers: response.headers }
+      return await this.run(execute, 'POST', options?.skipRetry, false, signal)
+    } finally {
+      cleanup()
     }
-
-    return this.run(execute, 'POST', options?.skipRetry, false, signal)
   }
 
   /**
@@ -351,7 +431,12 @@ export class HttpClient {
     }
   }
 
-  /** Perform a single fetch, translating low-level failures to typed errors. */
+  /**
+   * Perform a single fetch, translating low-level failures to typed errors.
+   * Returns a cleanup that clears the timeout timer. JSON callers must invoke
+   * it after reading the body; raw/stream callers should invoke it as soon as
+   * headers arrive so download bodies are not killed (TTFB-only timeout).
+   */
   private async doFetch(
     url: string,
     init: {
@@ -364,7 +449,7 @@ export class HttpClient {
       timeout: number
       signal?: AbortSignal
     },
-  ): Promise<Response> {
+  ): Promise<{ response: Response; cleanup: () => void }> {
     this.assertUrlAllowed(url)
 
     const { signal, cleanup } = makeRequestSignal(init.timeout, init.signal)
@@ -374,45 +459,22 @@ export class HttpClient {
     let headers = this.headersForUrl(init.headerUrl, init.headers)
 
     try {
-      for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
-        let response: Response
-        try {
-          response = await fetch(currentUrl, {
-            method,
-            headers,
-            body,
-            signal,
-            redirect: 'manual',
-          })
-        } catch (error) {
-          if (init.signal?.aborted || this.config.signal?.aborted) {
-            throw new NetworkError({
-              message: `Request aborted: ${method} ${currentUrl}`,
-              provider: this.config.provider,
-              retryable: false,
-            })
-          }
-          const name = error instanceof Error ? error.name : ''
-          if (name === 'TimeoutError' || name === 'AbortError') {
-            throw new TimeoutError({
-              message: `Request timed out after ${init.timeout}ms: ${method} ${currentUrl}`,
-              provider: this.config.provider,
-            })
-          }
-          throw new NetworkError({
-            message: `Network error: ${error instanceof Error ? error.message : String(error)}`,
-            provider: this.config.provider,
-            cause: error,
-          })
-        }
+      for (let hop = 0; ; hop++) {
+        const response = await fetch(currentUrl, {
+          method,
+          headers,
+          body,
+          signal,
+          redirect: 'manual',
+        })
 
         if (!REDIRECT_STATUS.has(response.status)) {
-          return response
+          return { response, cleanup }
         }
 
         void response.body?.cancel()
 
-        if (hop === MAX_REDIRECT_HOPS) {
+        if (hop >= MAX_REDIRECT_HOPS) {
           throw new ProviderError({
             message: `Too many redirects: ${method} ${currentUrl}`,
             provider: this.config.provider,
@@ -462,14 +524,67 @@ export class HttpClient {
           : this.headersForUrl(resolvedHref, init.headers)
         currentUrl = resolvedHref
       }
+    } catch (error) {
+      cleanup()
+      return this.classifyFetchFailure(error, {
+        method,
+        url: currentUrl,
+        timeout: init.timeout,
+        userSignal: init.signal,
+        fetchSignal: signal,
+      })
+    }
+  }
 
-      throw new ProviderError({
-        message: `Too many redirects: ${method} ${currentUrl}`,
+  /**
+   * Classify a fetch/body abort. User/client abort is a non-retryable
+   * NetworkError. A timeout-named failure is TimeoutError only when a
+   * timeout was actually configured.
+   */
+  private classifyFetchFailure(
+    error: unknown,
+    ctx: {
+      method: string
+      url: string
+      timeout: number
+      userSignal?: AbortSignal
+      fetchSignal?: AbortSignal
+    },
+  ): never {
+    if (error instanceof WhatsAppError) throw error
+
+    if (ctx.userSignal?.aborted || this.config.signal?.aborted) {
+      throw new NetworkError({
+        message: `Request aborted: ${ctx.method} ${ctx.url}`,
+        provider: this.config.provider,
+        retryable: false,
+      })
+    }
+
+    const errorName = error instanceof Error ? error.name : ''
+    const reasonName = abortReasonName(error, ctx.fetchSignal)
+    const timedOut = errorName === 'TimeoutError' || reasonName === 'TimeoutError' || errorName === 'AbortError'
+
+    if (ctx.timeout > 0 && timedOut) {
+      throw new TimeoutError({
+        message: `Request timed out after ${ctx.timeout}ms: ${ctx.method} ${ctx.url}`,
         provider: this.config.provider,
       })
-    } finally {
-      cleanup()
     }
+
+    if (timedOut) {
+      throw new NetworkError({
+        message: `Request aborted: ${ctx.method} ${ctx.url}`,
+        provider: this.config.provider,
+        retryable: false,
+      })
+    }
+
+    throw new NetworkError({
+      message: `Network error: ${error instanceof Error ? error.message : String(error)}`,
+      provider: this.config.provider,
+      cause: error,
+    })
   }
 
   /**
@@ -529,7 +644,9 @@ export class HttpClient {
       } catch {
         errorBody = text || null
       }
-    } catch {
+    } catch (error) {
+      const name = error instanceof Error ? error.name : ''
+      if (name === 'AbortError' || name === 'TimeoutError') throw error
       errorBody = null
     }
 

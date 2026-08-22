@@ -338,6 +338,72 @@ describe('mapOutboundToCloudApi', () => {
       ).not.toThrow()
     })
 
+    test('throws ValidationError when a button id is empty', () => {
+      expect(() =>
+        mapOutboundToCloudApi({
+          type: 'interactive.button',
+          to: TEST_DATA.phone.primary,
+          body: 'Choose:',
+          buttons: [{ id: '', title: 'A' }],
+        }),
+      ).toThrow(ValidationError)
+    })
+
+    test('throws ValidationError when a button id exceeds 256 characters', () => {
+      expect(() =>
+        mapOutboundToCloudApi({
+          type: 'interactive.button',
+          to: TEST_DATA.phone.primary,
+          body: 'Choose:',
+          buttons: [{ id: 'x'.repeat(257), title: 'A' }],
+        }),
+      ).toThrow(ValidationError)
+    })
+
+    test('allows a button id of exactly 256 characters', () => {
+      expect(() =>
+        mapOutboundToCloudApi({
+          type: 'interactive.button',
+          to: TEST_DATA.phone.primary,
+          body: 'Choose:',
+          buttons: [{ id: 'x'.repeat(256), title: 'A' }],
+        }),
+      ).not.toThrow()
+    })
+
+    test('throws ValidationError when button body is empty', () => {
+      expect(() =>
+        mapOutboundToCloudApi({
+          type: 'interactive.button',
+          to: TEST_DATA.phone.primary,
+          body: '',
+          buttons: [{ id: '1', title: 'A' }],
+        }),
+      ).toThrow(ValidationError)
+    })
+
+    test('throws ValidationError when button body exceeds 1024 characters', () => {
+      expect(() =>
+        mapOutboundToCloudApi({
+          type: 'interactive.button',
+          to: TEST_DATA.phone.primary,
+          body: 'x'.repeat(1025),
+          buttons: [{ id: '1', title: 'A' }],
+        }),
+      ).toThrow(ValidationError)
+    })
+
+    test('allows a button body of exactly 1024 characters', () => {
+      expect(() =>
+        mapOutboundToCloudApi({
+          type: 'interactive.button',
+          to: TEST_DATA.phone.primary,
+          body: 'x'.repeat(1024),
+          buttons: [{ id: '1', title: 'A' }],
+        }),
+      ).not.toThrow()
+    })
+
     test('throws ValidationError when list button text exceeds 20 characters', () => {
       expect(() =>
         mapOutboundToCloudApi({
@@ -495,6 +561,100 @@ describe('mapOutboundToCloudApi', () => {
           sections,
         }),
       ).not.toThrow()
+    })
+
+    test('throws ValidationError when list body is empty', () => {
+      expect(() =>
+        mapOutboundToCloudApi({
+          type: 'interactive.list',
+          to: TEST_DATA.phone.primary,
+          body: '',
+          buttonText: 'View',
+          sections: [{ title: 'S', rows: [{ id: 'r', title: 'R' }] }],
+        }),
+      ).toThrow(ValidationError)
+    })
+
+    test('throws ValidationError when list body exceeds 1024 characters', () => {
+      expect(() =>
+        mapOutboundToCloudApi({
+          type: 'interactive.list',
+          to: TEST_DATA.phone.primary,
+          body: 'x'.repeat(1025),
+          buttonText: 'View',
+          sections: [{ title: 'S', rows: [{ id: 'r', title: 'R' }] }],
+        }),
+      ).toThrow(ValidationError)
+    })
+
+    test('allows a list body of exactly 1024 characters', () => {
+      expect(() =>
+        mapOutboundToCloudApi({
+          type: 'interactive.list',
+          to: TEST_DATA.phone.primary,
+          body: 'x'.repeat(1024),
+          buttonText: 'View',
+          sections: [{ title: 'S', rows: [{ id: 'r', title: 'R' }] }],
+        }),
+      ).not.toThrow()
+    })
+
+    test('throws ValidationError when a list row description exceeds 72 characters', () => {
+      expect(() =>
+        mapOutboundToCloudApi({
+          type: 'interactive.list',
+          to: TEST_DATA.phone.primary,
+          body: 'Browse:',
+          buttonText: 'View',
+          sections: [
+            {
+              title: 'Section 1',
+              rows: [{ id: 'item1', title: 'Item 1', description: 'd'.repeat(73) }],
+            },
+          ],
+        }),
+      ).toThrow(ValidationError)
+    })
+
+    test('allows a list row description of exactly 72 characters', () => {
+      expect(() =>
+        mapOutboundToCloudApi({
+          type: 'interactive.list',
+          to: TEST_DATA.phone.primary,
+          body: 'Browse:',
+          buttonText: 'View',
+          sections: [
+            {
+              title: 'Section 1',
+              rows: [{ id: 'item1', title: 'Item 1', description: 'd'.repeat(72) }],
+            },
+          ],
+        }),
+      ).not.toThrow()
+    })
+
+    test('throws ValidationError when list sections are empty', () => {
+      expect(() =>
+        mapOutboundToCloudApi({
+          type: 'interactive.list',
+          to: TEST_DATA.phone.primary,
+          body: 'Browse:',
+          buttonText: 'View',
+          sections: [],
+        }),
+      ).toThrow(ValidationError)
+    })
+
+    test('throws ValidationError when total rows is zero', () => {
+      expect(() =>
+        mapOutboundToCloudApi({
+          type: 'interactive.list',
+          to: TEST_DATA.phone.primary,
+          body: 'Browse:',
+          buttonText: 'View',
+          sections: [{ title: 'Section 1', rows: [] }],
+        }),
+      ).toThrow(ValidationError)
     })
   })
 

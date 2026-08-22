@@ -35,4 +35,20 @@ describe('normalizePhoneNumber', () => {
   test('throws on non-numeric input', () => {
     expect(() => normalizePhoneNumber('abc')).toThrow()
   })
+
+  test.each([
+    ['+966\u200B501234567'],
+    ['+966\u200C50\u200D1234567'],
+    ['+966\u202A501234567\u202C'],
+    ['+966\u202D50\u202E1234567'],
+    ['+966\u2060501234567'],
+    ['+966\uFEFF501234567'],
+    ['+966\u00A0501234567'],
+  ])('strips zero-width, bidi, BOM, and NBSP from %j', (input) => {
+    expect(normalizePhoneNumber(input)).toBe('966501234567')
+  })
+
+  test('throws on leftover non-digit characters', () => {
+    expect(() => normalizePhoneNumber('+966abc501234567')).toThrow(ValidationError)
+  })
 })
