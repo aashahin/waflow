@@ -397,6 +397,23 @@ describe('otp namespace', () => {
     ).rejects.toBeInstanceOf(ValidationError)
     expect(adapter.sendMessage).not.toHaveBeenCalled()
   })
+
+  test('otp.send() omits the copy-code button on Wati', async () => {
+    const adapter = createMockAdapter({ name: 'wati' })
+    const client = new WhatsAppClient(adapter)
+
+    await client.otp.send(TEST_DATA.phone.primary, '123456', { template: 'login_code' })
+
+    expect(adapter.sendMessage).toHaveBeenCalledWith({
+      type: 'template',
+      to: TEST_DATA.phone.primary,
+      template: {
+        name: 'login_code',
+        language: 'en_US',
+        components: [{ type: 'body', parameters: [{ type: 'text', text: '123456' }] }],
+      },
+    })
+  })
 })
 
 describe('lifecycle', () => {

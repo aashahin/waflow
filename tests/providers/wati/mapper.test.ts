@@ -156,6 +156,83 @@ describe('mapOutboundToWati', () => {
         { name: '2', value: 'body-val' },
       ])
     })
+
+    test('throws UnsupportedFeatureError for image header parameters', () => {
+      expect(() =>
+        mapOutboundToWati({
+          type: 'template',
+          to: TEST_DATA.phone.primary,
+          template: {
+            name: 'test',
+            language: 'en',
+            components: [
+              {
+                type: 'header',
+                parameters: [{ type: 'image', image: { url: 'https://example.com/img.jpg' } }],
+              },
+            ],
+          },
+        }),
+      ).toThrow(UnsupportedFeatureError)
+    })
+
+    test('throws UnsupportedFeatureError for button components', () => {
+      expect(() =>
+        mapOutboundToWati({
+          type: 'template',
+          to: TEST_DATA.phone.primary,
+          template: {
+            name: 'test',
+            language: 'en',
+            components: [
+              {
+                type: 'button',
+                sub_type: 'url',
+                index: 0,
+                parameters: [{ type: 'text', text: '123456' }],
+              },
+            ],
+          },
+        }),
+      ).toThrow(UnsupportedFeatureError)
+    })
+
+    test('skips footer components that have no parameters', () => {
+      const result = mapOutboundToWati({
+        type: 'template',
+        to: TEST_DATA.phone.primary,
+        template: {
+          name: 'test',
+          language: 'en',
+          components: [
+            { type: 'header', parameters: [{ type: 'text', text: 'header-val' }] },
+            { type: 'footer', parameters: [] },
+            { type: 'body', parameters: [{ type: 'text', text: 'body-val' }] },
+          ] as never,
+        },
+      })
+
+      expect(result.body?.['parameters']).toEqual([
+        { name: '1', value: 'header-val' },
+        { name: '2', value: 'body-val' },
+      ])
+    })
+
+    test('throws UnsupportedFeatureError when a footer has parameters', () => {
+      expect(() =>
+        mapOutboundToWati({
+          type: 'template',
+          to: TEST_DATA.phone.primary,
+          template: {
+            name: 'test',
+            language: 'en',
+            components: [
+              { type: 'footer', parameters: [{ type: 'text', text: 'thanks' }] },
+            ] as never,
+          },
+        }),
+      ).toThrow(UnsupportedFeatureError)
+    })
   })
 
   describe('media messages', () => {

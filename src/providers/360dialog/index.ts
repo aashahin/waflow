@@ -16,7 +16,7 @@ import { HttpClient } from '../../core/http.js'
 import { RateLimiter } from '../../core/rate-limiter.js'
 import { noopLogger, type Logger } from '../../core/logger.js'
 import { MediaError, ProviderError } from '../../core/errors.js'
-import { resolveHttpDownloadUrl } from '../../core/url-guard.js'
+import { assertSafeMediaId, resolveHttpDownloadUrl } from '../../core/url-guard.js'
 import { mapOutboundToCloudApi } from '../cloud-api/mapper.js'
 import { parseCloudApiWebhook } from '../cloud-api/webhook-parser.js'
 import { getResponseBodyStream, parseOptionalFileSize } from '../cloud-api/index.js'
@@ -36,8 +36,9 @@ function isMetaMediaCdnHost(hostname: string): boolean {
 }
 
 /**
- * 360dialog serves Meta CDN attachments from its API origin, which is what
- * keeps `D360-API-KEY` on the subsequent download (same origin as baseUrl).
+ * 360dialog serves WhatsApp attachment paths from its API origin, which is
+ * what keeps `D360-API-KEY` on the subsequent download (same origin as baseUrl).
+ * Other Meta-CDN paths stay unchanged so HttpClient strips the key off-origin.
  */
 function rewriteDialog360MediaUrl(downloadUrl: string, apiBaseUrl: string): string {
   let media: URL
@@ -49,6 +50,13 @@ function rewriteDialog360MediaUrl(downloadUrl: string, apiBaseUrl: string): stri
 
   if (!isMetaMediaCdnHost(media.hostname)) return downloadUrl
 
+  // Only proxy WhatsApp media paths; anything else on lookaside/fbcdn would
+  // otherwise inherit D360-API-KEY after the origin rewrite.
+  const segments = media.pathname.split('/')
+  if (!segments.includes('whatsapp_business') && !segments.includes('attachments')) {
+    return downloadUrl
+  }
+
   let api: URL
   try {
     api = new URL(apiBaseUrl)
@@ -56,7 +64,8 @@ function rewriteDialog360MediaUrl(downloadUrl: string, apiBaseUrl: string): stri
     return downloadUrl
   }
 
-  return `${api.origin}${media.pathname}${media.search}${media.hash}`
+  const basePath = api.pathname.replace(/\/$/, '')
+  return `${api.origin}${basePath}${media.pathname}${media.search}${media.hash}`
 }
 
 /** 360Dialog supports same features as Cloud API, minus webhook challenge */
@@ -170,7 +179,8 @@ export class Dialog360Provider implements WhatsAppProviderAdapter {
     const response = await this.http.uploadRequest<CloudApiMediaUploadResponse>(
       '/media',
       formData,
-      { timeout: params.timeout },
+      // JSON client timeout is 30s; large uploads need longer. Caller timeout still wins.
+      { timeout: params.timeout ?? 120_000 },
     )
 
     const id = response.data?.id
@@ -189,7 +199,7 @@ export class Dialog360Provider implements WhatsAppProviderAdapter {
   async getMediaUrl(mediaId: string): Promise<MediaUrlResult> {
     const response = await this.http.request<CloudApiMediaUrlResponse>({
       method: 'GET',
-      path: `/${mediaId}`,
+      path: `/${assertSafeMediaId(mediaId, this.name)}`,
     })
 
     const url = response.data?.url
@@ -242,19 +252,17 @@ export class Dialog360Provider implements WhatsAppProviderAdapter {
       expectedMimeType ??
       'application/octet-stream'
 
-    const contentLength = response.headers.get('content-length')
-
     return {
       stream,
       mimeType,
-      contentLength: contentLength ? parseInt(contentLength, 10) : undefined,
+      contentLength: parseOptionalFileSize(response.headers.get('content-length')),
     }
   }
 
   async deleteMedia(mediaId: string): Promise<void> {
     await this.http.request({
       method: 'DELETE',
-      path: `/${mediaId}`,
+      path: `/${assertSafeMediaId(mediaId, this.name)}`,
     })
   }
 

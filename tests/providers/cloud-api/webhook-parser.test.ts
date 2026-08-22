@@ -61,6 +61,7 @@ describe('parseCloudApiWebhook', () => {
         expect(events[0].message.body).toBe('Hello!')
       }
       expect(events[0].contact?.name).toBe('Ahmad')
+      expect(events[0].echo).toBeUndefined()
     }
   })
 
@@ -473,6 +474,7 @@ describe('parseCloudApiWebhook', () => {
     if (events[0]?.type === 'message') {
       expect(events[0].messageId).toBe('wamid.smb-echo')
       expect(events[0].message).toEqual({ type: 'text', body: 'echo from smb' })
+      expect(events[0].echo).toBe(true)
     }
   })
 
@@ -512,6 +514,7 @@ describe('parseCloudApiWebhook', () => {
     if (events[0]?.type === 'message') {
       expect(events[0].messageId).toBe('wamid.echo')
       expect(events[0].message).toEqual({ type: 'text', body: 'echo' })
+      expect(events[0].echo).toBe(true)
     }
   })
 

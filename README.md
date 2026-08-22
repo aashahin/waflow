@@ -173,13 +173,14 @@ await wa.otp.send('+966501234567', '123456', {
 ```
 
 waflow does **not** auto-retry sends on network/timeout (see [Retry](#retry)), so a
-dropped response won't deliver a second code. On Wati, the code is sent as the
-template's body parameter (Wati auth templates have no button component).
+dropped response won't deliver a second code. On Wati, `otp.send()` sends the
+code as the template's body parameter only — the copy-code button is omitted
+automatically (Wati auth templates have no button component).
 
 ### Media Operations
 
 ```typescript
-// Upload
+// Upload — default timeout 120s if you omit `timeout` (JSON API default stays 30s)
 const { id: mediaId } = await wa.media.upload({
   file: new Uint8Array(buffer),
   mimeType: 'image/png',
@@ -212,8 +213,17 @@ await wa.media.delete('media-id-123')
 > `100.64.0.0/10`), private IPv6 (loopback, link-local, unique-local), and IPv6
 > encodings of those IPv4 ranges (mapped, compatible, 6to4, NAT64). Public IPv6
 > is allowed. Redirect hops are re-checked the same way; an `https` API origin
-> never forwards credentials onto an `http` hop. Hostnames are not DNS-resolved,
-> so do not pass untrusted URLs to `media.download`.
+> never forwards credentials onto an `http` hop. Hostnames are **not
+> DNS-resolved**; trailing-dot FQDNs (`localhost.`) are treated as local and
+> refused. Do not pass untrusted URLs to `media.download`.
+>
+> **Media IDs:** must be a single path segment. IDs containing `/` throw
+> `ValidationError` — they are not interpolated into `/{mediaId}`.
+>
+> **Download credentials:** the access token / API key is **not** sent to
+> `facebook.com`, `whatsapp.net`, or Graph (`graph.facebook.com` /
+> `graph.whatsapp.com`). Only the configured API origin and Meta media CDNs
+> (`*.fbcdn.net`, `*.fbsbx.com`) receive credentials when appropriate.
 >
 > **360dialog downloads:** Meta `lookaside.fbsbx.com` (and other Meta CDN) URLs
 > are rewritten onto the configured `baseUrl` (default
@@ -229,6 +239,10 @@ const events = wa.webhook.parse(requestBody)
 for (const event of events) {
   switch (event.type) {
     case 'message':
+      // Cloud API / 360dialog `smb_message_echoes` and `message_echoes`
+      // parse as message events with `echo: true`. Skip them in auto-reply
+      // bots or you will loop on your own outbound messages.
+      if (event.echo) break
       console.log(`From: ${event.from}`)
       if (event.message.type === 'text') {
         console.log(`Text: ${event.message.body}`)
@@ -246,6 +260,10 @@ for (const event of events) {
   }
 }
 ```
+
+> **Echoes:** inbound user messages omit `echo`. History / SMB echoes are still
+> `type: 'message'` so existing `switch` arms keep working — gate on
+> `event.echo` before you auto-reply.
 
 #### Webhook Verification (Elysia)
 
@@ -408,6 +426,10 @@ const wa = createWhatsApp({
 >
 > A Wati send that is accepted (`result: true`) but includes **no message id**
 > throws `ProviderError` (breaking vs 0.6.0, which returned an empty `messageId`).
+>
+> Wati template parameters must be `type: 'text'`. Image / video / document /
+> currency / date_time / payload parameters **throw** — they are not silently
+> dropped from the flattened parameter list.
 
 ## Switch Providers
 
@@ -480,6 +502,31 @@ Available features:
 > `supports('webhook.signature_verification')` / `supports('webhook.challenge')`
 > are also **false** on Cloud API / 360dialog when `appSecret` /
 > `webhookSecret` / `webhookVerifyToken` is not configured.
+
+### Bundling
+
+`createWhatsApp()` from the main `'waflow'` entry **bundles every built-in
+provider** (Cloud API, 360dialog, Wati). Do **not** assume the main entry
+tree-shakes unused providers.
+
+For a smaller edge bundle, import one provider from its subpath and wrap it
+with `createWhatsAppFromAdapter`:
+
+```typescript
+import { createWhatsAppFromAdapter } from 'waflow'
+import { CloudApiProvider } from 'waflow/providers/cloud-api'
+
+const wa = createWhatsAppFromAdapter(
+  new CloudApiProvider({
+    provider: 'cloud-api',
+    phoneNumberId: process.env.WA_PHONE_ID!,
+    accessToken: process.env.WA_ACCESS_TOKEN!,
+  }),
+)
+```
+
+Subpaths also exist for `'waflow/providers/360dialog'` (`Dialog360Provider`)
+and `'waflow/providers/wati'` (`WatiProvider`).
 
 ## Configuration
 
@@ -561,12 +608,19 @@ A caller abort unblocks waiters instead of leaving them queued until
 const wa = createWhatsApp({
   provider: 'cloud-api',
   // ...credentials
-  timeout: 30_000, // default: 30 seconds (JSON API calls)
+  timeout: 30_000, // default: 30 seconds (JSON API calls, including body read)
 })
+
+// media.upload() defaults to 120s when you omit `timeout` (multipart is slower).
+// Override per call: wa.media.upload({ file, mimeType, timeout: 60_000 })
 
 // media.download() defaults to no timeout so the body stream is not killed.
 // Override per call: wa.media.download(id, { timeout: 60_000 })
 ```
+
+Caller abort (`ClientOptions.signal` or a per-request `signal`) is a
+non-retryable `NetworkError`. An SDK timeout is `TimeoutError` — `AbortError`
+from a caller abort is not classified as a timeout.
 
 ### Logger
 
@@ -599,10 +653,13 @@ const wa = createWhatsApp({
   // ...credentials
   hooks: {
     onRequest: ({ url, method }) => {
-      console.log(`→ ${method} ${url}`)
+      // `url` may include signed media-download query tokens — log origin+path only.
+      const u = new URL(url)
+      console.log(`→ ${method} ${u.origin}${u.pathname}`)
     },
     onResponse: ({ url, status, durationMs }) => {
-      console.log(`← ${status} ${url} (${durationMs}ms)`)
+      const u = new URL(url)
+      console.log(`← ${status} ${u.origin}${u.pathname} (${durationMs}ms)`)
     },
     onError: (error) => {
       Sentry.captureException(error)
@@ -612,8 +669,13 @@ const wa = createWhatsApp({
 ```
 
 > ⚠️ **`onRequest.body` may contain OTP codes and template parameters.** Do not
-> log raw request bodies in production. Stick to `url` / `method` (and maybe
-> byte length) for telemetry.
+> log raw request bodies in production.
+>
+> Debug logs print **origin + path only** (query strings are stripped).
+> `onRequest.url` / `onResponse.url` may still be the **full URL**, including
+> signed media-download query tokens — do **not** log those URLs for media
+> downloads in production. Stick to `method` (and maybe byte length) for
+> telemetry.
 
 ### Raw Response
 
@@ -736,6 +798,10 @@ waflow is designed edge-first. It uses only standard Web APIs:
 - ❌ `Buffer`
 - ❌ `node:stream`
 - ❌ `process.env` (config passed via constructor)
+
+`createWhatsApp()` from the main `'waflow'` entry bundles every provider — it
+does **not** tree-shake unused ones. For a smaller edge bundle, import a
+provider subpath and `createWhatsAppFromAdapter` (see [Bundling](#bundling)).
 
 ## License
 

@@ -1,10 +1,13 @@
 import { describe, test, expect } from 'bun:test'
 import {
   assertSafeFetchUrl,
+  assertSafeMediaId,
+  bindAbortSignals,
   isPrivateHostname,
   isSameOrigin,
   isTrustedMediaHost,
   makeRequestSignal,
+  mergeAbortSignals,
   resolveHttpDownloadUrl,
 } from '../../src/core/url-guard.js'
 import { ValidationError } from '../../src/core/errors.js'
@@ -44,6 +47,44 @@ describe('isTrustedMediaHost', () => {
     expect(
       isTrustedMediaHost('https://evil.example/steal', 'https://graph.facebook.com/v25.0'),
     ).toBe(false)
+  })
+
+  test('does not trust facebook.com or whatsapp.net for credential forwarding', () => {
+    expect(
+      isTrustedMediaHost(
+        'https://www.facebook.com/x',
+        'https://graph.facebook.com/v25.0',
+        'cloud-api',
+      ),
+    ).toBe(false)
+    expect(
+      isTrustedMediaHost(
+        'https://facebook.com/x',
+        'https://graph.facebook.com/v25.0',
+        'cloud-api',
+      ),
+    ).toBe(false)
+    expect(
+      isTrustedMediaHost(
+        'https://media.whatsapp.net/v/t1.jpg',
+        'https://graph.facebook.com/v25.0',
+        'cloud-api',
+      ),
+    ).toBe(false)
+    expect(
+      isTrustedMediaHost(
+        'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1',
+        'https://graph.facebook.com/v25.0',
+        'cloud-api',
+      ),
+    ).toBe(true)
+    expect(
+      isTrustedMediaHost(
+        'https://scontent.xx.fbcdn.net/v/t1.jpg',
+        'https://graph.facebook.com/v25.0',
+        'cloud-api',
+      ),
+    ).toBe(true)
   })
 
   test('does not trust graph.facebook.com even as same origin', () => {
@@ -183,6 +224,19 @@ describe('isPrivateHostname / assertSafeFetchUrl', () => {
     expect(isPrivateHostname('134744072')).toBe(false)
   })
 
+  test('flags dotted IPv4 shorthand and hex literals that getaddrinfo maps privately', () => {
+    expect(isPrivateHostname('127.1')).toBe(true)
+    expect(isPrivateHostname('127.1.')).toBe(true)
+    expect(isPrivateHostname('10.1')).toBe(true)
+    expect(isPrivateHostname('127.0.1')).toBe(true)
+    expect(isPrivateHostname('192.168.1')).toBe(true)
+    expect(isPrivateHostname('0x7f000001')).toBe(true)
+    expect(isPrivateHostname('0x7f.1')).toBe(true)
+    expect(isPrivateHostname('0x7f.0.0.1')).toBe(true)
+    expect(isPrivateHostname('8.8')).toBe(false)
+    expect(isPrivateHostname('8.8.8.8')).toBe(false)
+  })
+
   test('flags IPv4 with leading zeros as unsafe', () => {
     expect(isPrivateHostname('0177.0.0.1')).toBe(true)
     expect(isPrivateHostname('01.2.3.4')).toBe(true)
@@ -190,6 +244,10 @@ describe('isPrivateHostname / assertSafeFetchUrl', () => {
 
   test('flags localhost suffixes, unspecified IPv4, and IPv6 ULA/link-local', () => {
     expect(isPrivateHostname('foo.localhost')).toBe(true)
+    expect(isPrivateHostname('localhost.')).toBe(true)
+    expect(isPrivateHostname('foo.localhost.')).toBe(true)
+    expect(isPrivateHostname('x.local.')).toBe(true)
+    expect(isPrivateHostname('metadata.google.internal.')).toBe(true)
     expect(isPrivateHostname('printer.local')).toBe(true)
     expect(isPrivateHostname('svc.internal')).toBe(true)
     expect(isPrivateHostname('0.0.0.0')).toBe(true)
@@ -203,6 +261,22 @@ describe('isPrivateHostname / assertSafeFetchUrl', () => {
   })
 
   test('refuses private URLs', () => {
+    expect(() => assertSafeFetchUrl('http://localhost/', 'cloud-api')).toThrow(ValidationError)
+    expect(() => assertSafeFetchUrl('http://localhost./', 'cloud-api')).toThrow(ValidationError)
+    expect(() => assertSafeFetchUrl('http://foo.localhost/', 'cloud-api')).toThrow(
+      ValidationError,
+    )
+    expect(() => assertSafeFetchUrl('http://foo.localhost./', 'cloud-api')).toThrow(
+      ValidationError,
+    )
+    expect(() => assertSafeFetchUrl('http://metadata.google.internal/', 'cloud-api')).toThrow(
+      ValidationError,
+    )
+    expect(() => assertSafeFetchUrl('http://metadata.google.internal./', 'cloud-api')).toThrow(
+      ValidationError,
+    )
+    expect(() => assertSafeFetchUrl('http://x.local/', 'cloud-api')).toThrow(ValidationError)
+    expect(() => assertSafeFetchUrl('http://x.local./', 'cloud-api')).toThrow(ValidationError)
     expect(() => assertSafeFetchUrl('http://127.0.0.1/latest', 'cloud-api')).toThrow(
       ValidationError,
     )
@@ -224,6 +298,9 @@ describe('isPrivateHostname / assertSafeFetchUrl', () => {
     expect(() => assertSafeFetchUrl('http://100.64.0.1/', 'cloud-api')).toThrow(
       ValidationError,
     )
+    expect(() => assertSafeFetchUrl('http://127.1/', 'cloud-api')).toThrow(ValidationError)
+    expect(() => assertSafeFetchUrl('http://10.1/', 'cloud-api')).toThrow(ValidationError)
+    expect(() => assertSafeFetchUrl('http://192.168.1/', 'cloud-api')).toThrow(ValidationError)
   })
 
   test('refuses non-HTTP schemes and invalid URLs', () => {
@@ -240,6 +317,95 @@ describe('isSameOrigin', () => {
     expect(isSameOrigin('http://example.com/a', 'https://example.com/a')).toBe(false)
     expect(isSameOrigin('not a url', 'https://example.com')).toBe(false)
     expect(isSameOrigin('https://example.com', 'not a url')).toBe(false)
+  })
+})
+
+describe('assertSafeMediaId', () => {
+  test('trims a single-segment identifier', () => {
+    expect(assertSafeMediaId('abc', 'cloud-api')).toBe('abc')
+    expect(assertSafeMediaId('  abc  ', 'cloud-api')).toBe('abc')
+  })
+
+  test('rejects reserved Graph path segments', () => {
+    expect(() => assertSafeMediaId('me', 'cloud-api')).toThrow(ValidationError)
+    expect(() => assertSafeMediaId('debug_token', 'cloud-api')).toThrow(ValidationError)
+  })
+
+  test('rejects empty, path traversal, and query characters', () => {
+    expect(() => assertSafeMediaId('', 'cloud-api')).toThrow(ValidationError)
+    expect(() => assertSafeMediaId('   ', 'cloud-api')).toThrow(ValidationError)
+    expect(() => assertSafeMediaId('../v19.0/me', 'cloud-api')).toThrow(ValidationError)
+    expect(() => assertSafeMediaId('123?fields=id', 'cloud-api')).toThrow(ValidationError)
+    expect(() => assertSafeMediaId('a/b', 'cloud-api')).toThrow(ValidationError)
+    expect(() => assertSafeMediaId('id#frag', 'cloud-api')).toThrow(ValidationError)
+  })
+})
+
+describe('bindAbortSignals / mergeAbortSignals', () => {
+  test('returns undefined when no signals are present', () => {
+    const bound = bindAbortSignals([undefined, undefined])
+    expect(bound.signal).toBeUndefined()
+    bound.cleanup()
+    expect(mergeAbortSignals(undefined, undefined)).toBeUndefined()
+  })
+
+  test('returns the sole present signal', () => {
+    const user = new AbortController()
+    const bound = bindAbortSignals([undefined, user.signal])
+    expect(bound.signal).toBe(user.signal)
+    bound.cleanup()
+    expect(mergeAbortSignals(user.signal)).toBe(user.signal)
+  })
+
+  test('native combiner aborts when either input aborts', () => {
+    const a = new AbortController()
+    const b = new AbortController()
+    const { signal, cleanup } = bindAbortSignals([a.signal, b.signal])
+    expect(signal?.aborted).toBe(false)
+    a.abort()
+    expect(signal?.aborted).toBe(true)
+    cleanup()
+  })
+
+  test('mergeAbortSignals returns only the combined signal', () => {
+    const a = new AbortController()
+    const b = new AbortController()
+    const signal = mergeAbortSignals(a.signal, b.signal)
+    expect(signal?.aborted).toBe(false)
+    b.abort()
+    expect(signal?.aborted).toBe(true)
+  })
+
+  test('polyfill cleanup removes listeners from long-lived signals', () => {
+    const nativeAny = AbortSignal.any
+    Object.defineProperty(AbortSignal, 'any', { configurable: true, value: undefined })
+    try {
+      const client = new AbortController()
+      const request = new AbortController()
+      const { signal, cleanup } = bindAbortSignals([client.signal, request.signal])
+      expect(signal).toBeDefined()
+      expect(signal?.aborted).toBe(false)
+      cleanup()
+      client.abort()
+      expect(signal?.aborted).toBe(false)
+    } finally {
+      Object.defineProperty(AbortSignal, 'any', { configurable: true, value: nativeAny })
+    }
+  })
+
+  test('polyfill aborts the wrapper when an input aborts before cleanup', () => {
+    const nativeAny = AbortSignal.any
+    Object.defineProperty(AbortSignal, 'any', { configurable: true, value: undefined })
+    try {
+      const client = new AbortController()
+      const request = new AbortController()
+      const { signal, cleanup } = bindAbortSignals([client.signal, request.signal])
+      request.abort('stop')
+      expect(signal?.aborted).toBe(true)
+      cleanup()
+    } finally {
+      Object.defineProperty(AbortSignal, 'any', { configurable: true, value: nativeAny })
+    }
   })
 })
 

@@ -136,6 +136,7 @@ export function mapOutboundToWati(message: OutboundMessage): WatiMappedRequest {
 /**
  * Flatten template components into Wati's parameter format.
  * Wati expects: [{ name: "1", value: "..." }, { name: "2", value: "..." }]
+ * Wati templates only support text header/body params.
  */
 function flattenTemplateParameters(
   components?: TemplateComponent[],
@@ -154,6 +155,25 @@ function flattenTemplateParameters(
           index++
         }
       }
+    }
+  }
+
+  for (const component of components) {
+    const type = component.type as string
+    if (type === 'footer') {
+      if (component.parameters.length > 0) {
+        throw new UnsupportedFeatureError({
+          message: 'Wati templates only support text header/body params',
+          provider: 'wati',
+        })
+      }
+      continue
+    }
+    if (type === 'button' || component.parameters.some(param => param.type !== 'text')) {
+      throw new UnsupportedFeatureError({
+        message: 'Wati templates only support text header/body params',
+        provider: 'wati',
+      })
     }
   }
 

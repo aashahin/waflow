@@ -1,8 +1,9 @@
 import type { ProviderName } from '../types/common.js'
 import { ValidationError } from './errors.js'
 
-const META_CDN_SUFFIXES = ['.facebook.com', '.fbcdn.net', '.fbsbx.com', '.whatsapp.net'] as const
-const META_CDN_HOSTS = new Set(['facebook.com', 'fbcdn.net', 'fbsbx.com', 'whatsapp.net'])
+// Media CDNs only — facebook.com / whatsapp.net must not inherit API credentials
+const META_CDN_SUFFIXES = ['.fbcdn.net', '.fbsbx.com'] as const
+const META_CDN_HOSTS = new Set(['lookaside.fbsbx.com', 'fbsbx.com', 'fbcdn.net'])
 const D360_SUFFIXES = ['.360dialog.io', '.360dialog.com'] as const
 const D360_HOSTS = new Set(['360dialog.io', '360dialog.com'])
 
@@ -31,21 +32,26 @@ export function resolveHttpDownloadUrl(mediaIdOrUrl: string): string | undefined
   return isAbsoluteUrl(schemeNormalized) ? schemeNormalized : undefined
 }
 
-/** Combine caller + client abort signals. `undefined` if neither is set. */
-export function mergeAbortSignals(
-  ...signals: Array<AbortSignal | undefined>
-): AbortSignal | undefined {
+const noopCleanup = (): void => {}
+
+/**
+ * Combine abort signals. Call `cleanup` so polyfill listeners are not left on a
+ * long-lived client signal. Native `AbortSignal.any` needs no cleanup.
+ */
+export function bindAbortSignals(
+  signals: Array<AbortSignal | undefined>,
+): { signal?: AbortSignal; cleanup: () => void } {
   const present: AbortSignal[] = []
   for (const signal of signals) {
     if (signal !== undefined && !present.includes(signal)) present.push(signal)
   }
-  if (present.length === 0) return undefined
-  if (present.length === 1) return present[0]
+  if (present.length === 0) return { signal: undefined, cleanup: noopCleanup }
+  if (present.length === 1) return { signal: present[0], cleanup: noopCleanup }
   if (typeof AbortSignal.any === 'function') {
-    return AbortSignal.any(present)
+    return { signal: AbortSignal.any(present), cleanup: noopCleanup }
   }
   const alreadyAborted = present.find(signal => signal.aborted)
-  if (alreadyAborted) return alreadyAborted
+  if (alreadyAborted) return { signal: alreadyAborted, cleanup: noopCleanup }
   const controller = new AbortController()
   const onAbort = () => {
     controller.abort(present.find(signal => signal.aborted)?.reason)
@@ -53,7 +59,21 @@ export function mergeAbortSignals(
   for (const signal of present) {
     signal.addEventListener('abort', onAbort, { once: true })
   }
-  return controller.signal
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      for (const signal of present) {
+        signal.removeEventListener('abort', onAbort)
+      }
+    },
+  }
+}
+
+/** Combine caller + client abort signals. `undefined` if neither is set. */
+export function mergeAbortSignals(
+  ...signals: Array<AbortSignal | undefined>
+): AbortSignal | undefined {
+  return bindAbortSignals(signals).signal
 }
 
 export function isSameOrigin(url: string, baseUrl: string): boolean {
@@ -117,12 +137,60 @@ function isPrivateIpv4(host: string): boolean {
   return a === 172 && b >= 16 && b <= 31
 }
 
-function decimalToIpv4(host: string): string | undefined {
-  if (!/^\d+$/.test(host)) return undefined
-  const n = Number(host)
+function u32ToIpv4(n: number): string | undefined {
   if (!Number.isInteger(n) || n < 0 || n > 0xFFFFFFFF) return undefined
   const x = n >>> 0
   return `${(x >>> 24) & 255}.${(x >>> 16) & 255}.${(x >>> 8) & 255}.${x & 255}`
+}
+
+function decimalToIpv4(host: string): string | undefined {
+  if (/^0x[0-9a-f]+$/i.test(host)) return u32ToIpv4(Number(host))
+  if (!/^\d+$/.test(host)) return undefined
+  return u32ToIpv4(Number(host))
+}
+
+/**
+ * inet_aton-style dotted IPv4 (1–4 parts). getaddrinfo accepts `127.1` /
+ * `10.1` / `192.168.1` even when the WHATWG URL parser is not used.
+ * Leading zeros on any part are treated as private (ambiguous octal).
+ */
+function parseIpv4Part(part: string): number | 'unsafe' | undefined {
+  if (part.length > 1 && /^0[0-7]*$/.test(part)) return 'unsafe'
+  if (/^0x[0-9a-f]+$/i.test(part)) {
+    const n = Number(part)
+    return Number.isInteger(n) && n >= 0 ? n : undefined
+  }
+  if (!/^\d+$/.test(part)) return undefined
+  const n = Number(part)
+  return Number.isInteger(n) && n >= 0 ? n : undefined
+}
+
+function expandDottedIpv4(host: string): string | undefined {
+  const parts = host.split('.')
+  if (parts.length < 2 || parts.length > 4) return undefined
+  const parsed: number[] = []
+  for (const part of parts) {
+    const n = parseIpv4Part(part)
+    if (n === undefined) return undefined
+    if (n === 'unsafe') return '127.0.0.1'
+    parsed.push(n)
+  }
+
+  if (parts.length === 4) {
+    if (parsed.some(n => n > 255)) return undefined
+    return parsed.join('.')
+  }
+  if (parts.length === 2) {
+    const a = parsed[0] ?? 0
+    const b = parsed[1] ?? 0
+    if (a > 255 || b > 0xffffff) return undefined
+    return `${a}.${(b >>> 16) & 255}.${(b >>> 8) & 255}.${b & 255}`
+  }
+  const a = parsed[0] ?? 0
+  const b = parsed[1] ?? 0
+  const c = parsed[2] ?? 0
+  if (a > 255 || b > 255 || c > 0xffff) return undefined
+  return `${a}.${b}.${(c >>> 8) & 255}.${c & 255}`
 }
 
 function parseIpv6Hextets(host: string): number[] | undefined {
@@ -201,7 +269,8 @@ function isIpv6LoopbackOrUnspecified(hextets: number[]): boolean {
 }
 
 export function isPrivateHostname(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  // FQDN trailing dots (`localhost.`) must not bypass suffix checks
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '')
   if (
     host === 'localhost'
     || host === '0.0.0.0'
@@ -219,6 +288,9 @@ export function isPrivateHostname(hostname: string): boolean {
 
   const dottedDecimal = decimalToIpv4(host)
   if (dottedDecimal) return isPrivateIpv4(dottedDecimal)
+
+  const dottedShorthand = expandDottedIpv4(host)
+  if (dottedShorthand) return isPrivateIpv4(dottedShorthand)
 
   if (isPrivateIpv4(host)) return true
 
@@ -265,6 +337,32 @@ export function assertSafeFetchUrl(url: string, provider: ProviderName): void {
       provider,
     })
   }
+}
+
+const BLOCKED_MEDIA_IDS = new Set(['me', 'debug_token', 'app'])
+
+/** Encode a media id for path use; reject empty, traversal, and query characters. */
+export function assertSafeMediaId(id: string, provider: ProviderName): string {
+  const trimmed = id.trim()
+  if (!trimmed) {
+    throw new ValidationError({
+      message: 'Media id must be a non-empty string',
+      provider,
+    })
+  }
+  if (BLOCKED_MEDIA_IDS.has(trimmed.toLowerCase())) {
+    throw new ValidationError({
+      message: `Refusing reserved media id: ${trimmed}`,
+      provider,
+    })
+  }
+  if (trimmed.includes('/') || trimmed.includes('?') || trimmed.includes('#') || trimmed.includes('..')) {
+    throw new ValidationError({
+      message: `Refusing media id with path or query characters: ${trimmed}`,
+      provider,
+    })
+  }
+  return encodeURIComponent(trimmed)
 }
 
 function createTimeoutSignal(ms: number): { signal: AbortSignal; cleanup: () => void } {

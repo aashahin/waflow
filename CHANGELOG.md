@@ -5,7 +5,9 @@ All notable changes to this project are documented here. This project adheres to
 
 ## Unreleased (0.7.0)
 
-Download rewrite, abort, SSRF, webhook HMAC, and classification hardening.
+Download rewrite, abort, SSRF, webhook HMAC, classification hardening, and
+residual review (trailing-dot SSRF, mediaId allowlist, echo flag, timeouts,
+trusted-host narrowing, Wati template params, log query redaction).
 
 ### Breaking
 
@@ -16,6 +18,59 @@ Download rewrite, abort, SSRF, webhook HMAC, and classification hardening.
   Meta CDN) URLs onto the configured `baseUrl` (default
   `https://waba-v2.360dialog.io`) and sends `D360-API-KEY` there. Meta CDNs are
   never fetched with the 360dialog key.
+- **Wati non-text template parameters throw.** Image / video / document /
+  currency / date_time / payload params throw instead of being silently dropped
+  from the flattened Wati parameter list. Text params are unchanged.
+- **Webhook `echo` field.** Cloud API / 360dialog `smb_message_echoes` and
+  `message_echoes` parse as `type: 'message'` with `echo: true`. Inbound
+  messages omit `echo`. Auto-reply bots must ignore echo events or they will
+  loop. This is a new optional field on `IncomingMessageEvent`.
+- **`facebook.com` / `whatsapp.net` are no longer trusted media hosts** for
+  credential forwarding. `media.download` does **not** send the Cloud API bearer
+  token (or 360dialog API key) to `facebook.com` or `whatsapp.net`.
+  `graph.facebook.com` / `graph.whatsapp.com` were already untrusted. Meta media
+  CDNs (`*.fbcdn.net`, `*.fbsbx.com`) still receive credentials when appropriate.
+- **`mediaId` path allowlist.** Media IDs containing `/` throw
+  `ValidationError` instead of being interpolated into `/{mediaId}`. IDs must
+  be a single path segment.
+
+### Residual review
+
+- **Trailing-dot SSRF:** hostnames are still not DNS-resolved. Trailing-dot
+  FQDNs (`localhost.`) are treated as local and refused on caller-supplied
+  download URLs. Do not pass untrusted URLs to `media.download`.
+- **`mediaId` path allowlist:** see Breaking. IDs with `/` throw
+  `ValidationError`.
+- **Echo flag:** see Breaking. `smb_message_echoes` / `message_echoes` parse as
+  message events with `echo: true`.
+- **JSON body timeout:** the JSON API default (30s) covers response **body
+  read**, not just time-to-first-byte. A hung body no longer stalls past the
+  client timeout.
+- **AbortError vs TimeoutError:** caller / `ClientOptions.signal` abort is
+  non-retryable `NetworkError`. An SDK timeout is `TimeoutError`. `AbortError`
+  is not classified as a timeout when the caller aborted.
+- **Trusted-host narrowing:** see Breaking. `facebook.com` no longer gets a
+  bearer token on download.
+- **Wati non-text template params throw:** see Breaking.
+- **`listTemplates` `fields` / `limit`:** Cloud API list requests send explicit
+  `fields` and `limit` query params instead of relying on Graph defaults.
+- **`media.upload` default timeout is 120s** when the caller omits `timeout`.
+  JSON API default remains 30s. `media.download` still defaults to no SDK
+  timeout.
+- **Log query redaction:** debug logs print origin + path only (no query).
+  `onRequest.url` / `onResponse.url` may still be the full URL — do not log
+  media-download URLs in production.
+- **IPv4 dotted shorthand:** `127.1`, `10.1`, `127.0.1`, `192.168.1`, and hex
+  `0x7f000001` are classified as private even when the hostname is not
+  WHATWG-canonicalized (getaddrinfo still maps them to loopback/RFC1918).
+- **`otp.send` on Wati** omits the copy-code button by default so the unified
+  helper does not throw `UnsupportedFeatureError`. Matches the existing note
+  that Wati auth templates have no button component.
+- **Reserved media ids** (`me`, `debug_token`, `app`) throw `ValidationError`
+  instead of becoming Graph path segments.
+- **Hex-dotted IPv4** (`0x7f.1`, `0x7f.0.0.1`) is treated as private.
+- **360dialog rewrite** keeps a path-prefixed `baseUrl` and only rewrites
+  path segments `whatsapp_business` / `attachments`.
 
 ### Fixed
 

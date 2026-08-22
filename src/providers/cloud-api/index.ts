@@ -14,7 +14,7 @@ import { HttpClient } from '../../core/http.js'
 import { RateLimiter } from '../../core/rate-limiter.js'
 import { noopLogger, type Logger } from '../../core/logger.js'
 import { MediaError, ValidationError, ProviderError } from '../../core/errors.js'
-import { resolveHttpDownloadUrl } from '../../core/url-guard.js'
+import { assertSafeMediaId, resolveHttpDownloadUrl } from '../../core/url-guard.js'
 import { mapOutboundToCloudApi } from './mapper.js'
 import { parseCloudApiWebhook } from './webhook-parser.js'
 import { verifyHmacSha256, timingSafeEqual } from '../../utils/crypto.js'
@@ -137,7 +137,8 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
     const response = await this.http.uploadRequest<CloudApiMediaUploadResponse>(
       `/${this.config.phoneNumberId}/media`,
       formData,
-      { timeout: params.timeout },
+      // JSON client timeout is 30s; large uploads need longer. Caller timeout still wins.
+      { timeout: params.timeout ?? 120_000 },
     )
 
     const id = response.data?.id
@@ -156,7 +157,7 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
   async getMediaUrl(mediaId: string): Promise<MediaUrlResult> {
     const response = await this.http.request<CloudApiMediaUrlResponse>({
       method: 'GET',
-      path: `/${mediaId}`,
+      path: `/${assertSafeMediaId(mediaId, this.name)}`,
     })
 
     const url = response.data?.url
@@ -204,19 +205,17 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
       expectedMimeType ??
       'application/octet-stream'
 
-    const contentLength = response.headers.get('content-length')
-
     return {
       stream,
       mimeType,
-      contentLength: contentLength ? parseInt(contentLength, 10) : undefined,
+      contentLength: parseOptionalFileSize(response.headers.get('content-length')),
     }
   }
 
   async deleteMedia(mediaId: string): Promise<void> {
     await this.http.request({
       method: 'DELETE',
-      path: `/${mediaId}`,
+      path: `/${assertSafeMediaId(mediaId, this.name)}`,
     })
   }
 
@@ -278,7 +277,11 @@ export class CloudApiProvider implements WhatsAppProviderAdapter {
     let after: string | undefined
 
     do {
-      const query: Record<string, string> = {}
+      // Graph omits `components` unless requested; 100 is the documented page max.
+      const query: Record<string, string> = {
+        limit: '100',
+        fields: 'id,name,language,status,category,components',
+      }
       if (after) query['after'] = after
 
       const response = await this.http.request<CloudApiTemplatesResponse>({
